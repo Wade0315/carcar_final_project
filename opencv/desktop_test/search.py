@@ -1,21 +1,35 @@
 import cv2
 import numpy as np
+import time
 
+WIDTH =  1920
+HEIGHT = 1080
 cap = cv2.VideoCapture(0)
-# cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
-# cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
 
+# cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+# cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 lower_white = np.array([0, 0, 180])
 upper_white = np.array([180, 40, 255])
 
+if not cap.isOpened():
+    print("cannot open camera")
+    exit()
+#wait camera open
+time.sleep(5)
 try:
     while True:
-        ret, frame = cap.read()
+        try:
+            ret, frame = cap.read()
+        except cv2.error:
+            print("damaged photo")
+            continue        
+    
         if not ret:
-            break
-            
-        roi_frame = frame[0:1920, 0:1080]
-        
+            print("fail to read video")
+            time.sleep(1)
+            continue  
+
+        roi_frame = cv2.resize(frame, (WIDTH, HEIGHT))
         hsv = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2HSV)
         white_mask = cv2.inRange(hsv, lower_white, upper_white)
         cv2.imshow('1. Raw Mask', white_mask)
@@ -56,7 +70,7 @@ try:
         cv2.imshow('Pi 3B+ Robot View', roi_frame)
         # cv2.imshow('White Mask', white_mask) 
         if cv2.waitKey(1) & 0xFF == ord('q'):
-            print("手動結束程式")
+            print("manually close camera")
             break
 except KeyboardInterrupt:
     pass

@@ -10,16 +10,18 @@ if frame is None:
 
 roi_frame = frame.copy() 
 
-lower_white = np.array([0, 0, 180])
+lower_white = np.array([0, 0, 190])
 upper_white = np.array([180, 40, 255])
 
 hsv = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2HSV)
 white_mask = cv2.inRange(hsv, lower_white, upper_white)
+cv2.imshow('1.Pure White Mask', white_mask)
 
 kernel_open = np.ones((3,3), np.uint8)
 white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_OPEN, kernel_open)
-kernel_close = np.ones((5,5), np.uint8)
+kernel_close = np.ones((15,15), np.uint8)
 white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_CLOSE, kernel_close)
+cv2.imshow('2. White Mask', white_mask)
 
 contours, _ = cv2.findContours(white_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
@@ -27,8 +29,7 @@ print(f"--- 開始分析照片 {image_path} ---")
 for cnt in contours:
     area = cv2.contourArea(cnt)
     
-    if area > 100: 
-        print(f"area: {area}")
+    print(f"area: {area}")
         
     if 2000 < area < 80000:
         rect = cv2.minAreaRect(cnt)
@@ -43,6 +44,7 @@ for cnt in contours:
         ratio = short_side / long_side
         
         if ratio > 0.35:
+            cv2.drawContours(roi_frame, [cnt], -1, (0, 255, 0), 2)
             box = cv2.boxPoints(rect)
             box = np.intp(box)
             cv2.drawContours(roi_frame, [box], 0, (255, 0, 0), 2)
@@ -53,8 +55,7 @@ for cnt in contours:
 
 print("---------------------------")
 
-cv2.imshow('1. White Mask', white_mask)
-cv2.imshow('2. Result', roi_frame)
+cv2.imshow('3. Result', roi_frame)
 
 cv2.waitKey(0) 
 cv2.destroyAllWindows()
