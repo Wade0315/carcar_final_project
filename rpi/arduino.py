@@ -39,7 +39,7 @@ class Arduino:
         if self.ser is None:
             #print("serial not connected")
             return
-
+        msg = str(msg)
         if not msg.endswith("\n"):
             msg += "\n"
 

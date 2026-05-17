@@ -14,6 +14,13 @@ class Camera:
         self.kernel_open = np.ones((3, 3), np.uint8)
         self.kernel_close = np.ones((10, 10), np.uint8)
 
+        self.target_x = None
+        self.target_y = None
+        self.last_error = None
+        self.lost_count = 0
+        self.max_lost_frames = 5
+        self.max_tracking_distance = 50
+
         self.cap = cv2.VideoCapture(self.camera_index)
 
         if not self.cap.isOpened():
@@ -29,6 +36,7 @@ class Camera:
         # deal with single frame
         find_ball = False
         error = None
+        candidate = []
 
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         mask = cv2.inRange(hsv, self.lower_white, self.upper_white)
@@ -43,40 +51,130 @@ class Camera:
         )
 
         for cnt in contours:
-            area = cv2.contourArea(cnt)
+            self.contour_dealing(frame, cnt, candidate)
+        
+        find_ball, error, target = self.choose_ball(candidate)
 
+        if target is not None:
+            self.draw_target(frame, target)
+        return frame, mask, find_ball, error
+    
+    def choose_ball(self, candidate):
+        if len(candidate) > 0:
+            if self.target_x is None:
+                target = min(candidate, key=lambda b: abs(b["error"]))
+                distance = 0
+            else:
+                target = min(candidate,key=lambda b: (b["cx"] - self.target_x) ** 2 + (b["cy"] - self.target_y) ** 2)
+                distance = ((target["cx"] - self.target_x) ** 2 +(target["cy"] - self.target_y) ** 2) ** 0.5
+
+            if self.target_x is not None and distance > self.max_tracking_distance:
+                self.lost_count += 1
+                if self.lost_count <= self.max_lost_frames:
+                    return True, self.last_error, None
+                else:
+                    self.target_x = None
+                    self.target_y = None
+                    self.last_error = None
+                    return False, None, None
+
+            self.target_x = target["cx"]
+            self.target_y = target["cy"]
+            error = target["error"]
+            self.last_error = error
+            self.lost_count = 0
+
+            return True, error, target
+
+        else:
+            self.lost_count += 1
+
+            if self.lost_count <= self.max_lost_frames:
+                return True, self.last_error, None
+            else:
+                self.target_x = None
+                self.target_y = None
+                self.last_error = None
+                return False, None, None
+    
+    def contour_dealing(self, frame, cnt, candidate):
+            area = cv2.contourArea(cnt)
             if 800 < area < 10000:
                 rect = cv2.minAreaRect(cnt)
                 (w, h) = rect[1]
-
-                if w == 0 or h == 0:
-                    continue
-
+                
+                if w == 0 or h == 0: 
+                    return
+                
                 ratio = min(w, h) / max(w, h)
-
                 if ratio > 0.35:
-                    find_ball = True
-
                     box = cv2.boxPoints(rect)
                     box = np.intp(box)
                     cv2.drawContours(frame, [box], 0, (255, 0, 0), 2)
-
+                    
                     cx, cy = int(rect[0][0]), int(rect[0][1])
-                    error = cx - self.width // 2
-                    cv2.putText(
-                        frame,
-                        "Ball",
-                        (cx - 10, cy - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.5,
-                        (0, 0, 255),
-                        1
-                    )
+                    error_from_center = cx - self.width //2
+                    cv2.putText(frame, "Ball", (cx-10, cy-10), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+                    candidate.append({
+                    "contour": cnt,
+                    "rect": rect,
+                    "area": area,
+                    "cx": cx,
+                    "cy": cy,
+                    "error": error_from_center,
+                    "ratio": ratio
+                })
 
-        return frame, mask, find_ball, error
+    def draw_target(self, frame, target):
+        cx = target["cx"]
+        cy = target["cy"]
 
+        cv2.circle(frame, (cx, cy), 6, (0, 255, 0), -1)
+
+        cv2.putText(
+            frame,
+            "TARGET",
+            (cx - 25, cy + 25),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (0, 255, 0),
+            2
+        )
+
+        cv2.line(
+            frame,
+            (self.width // 2, 0),
+            (self.width // 2, self.height),
+            (0, 255, 255),
+            1
+        )
+
+        cv2.line(
+            frame,
+            (self.width // 2, cy),
+            (cx, cy),
+            (0, 255, 0),
+            2
+        )
+
+        cv2.putText(
+            frame,
+            f"error={target['error']}",
+            (10, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (0, 255, 0),
+            2
+        )
     def streaming(self):
         print("Starting tracking... Press 'q' to quit.")
+
+        at_frame = 0
+        processed_frame = None
+        mask = None
+        find_ball = False
+        error = None
 
         try:
             while True:
@@ -88,12 +186,18 @@ class Camera:
 
                 raw_frame = cv2.resize(raw_frame, (self.width, self.height))
 
-                processed_frame, mask, find_ball, error = self.process_frame(raw_frame)
+                if at_frame % 3 == 0:
+                    processed_frame, mask, find_ball, error = self.process_frame(raw_frame)
 
                 yield find_ball, error
 
-                cv2.imshow("Robot View", processed_frame)
-                cv2.imshow("White Mask", mask)
+                if processed_frame is not None:
+                    cv2.imshow("Robot View", processed_frame)
+
+                if mask is not None:
+                    cv2.imshow("White Mask", mask)
+
+                at_frame += 1
 
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     break
@@ -115,12 +219,14 @@ class Camera:
 
         raw_frame = cv2.resize(raw_frame, (self.width, self.height))
 
-        processed_frame, mask, find_ball = self.process_frame(raw_frame)
-
+        processed_frame, mask, find_ball, error = self.process_frame(raw_frame)
+        print(f'find_ball: {find_ball}, error: {error}')
         cv2.imwrite(filename, processed_frame)
         cv2.imwrite(f"mask_{filename}", mask)
 
         print("finish")
+        print("find_ball:", find_ball)
+        print("error:", error)
 
     def close(self):
         self.cap.release()
@@ -137,5 +243,5 @@ class Camera:
 if __name__ == "__main__":
     with Camera() as tracker:
         # tracker.single_test()
-        for find_ball in tracker.streaming():
-            print("find_ball:", find_ball)
+        for find_ball, error in tracker.streaming():
+            print("find_ball:", find_ball, "error:", error)

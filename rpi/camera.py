@@ -12,6 +12,13 @@ class Camera:
         self.kernel_open = np.ones((3, 3), np.uint8)
         self.kernel_close = np.ones((10, 10), np.uint8)
 
+        self.target_x = None
+        self.target_y = None
+        self.last_error = None
+        self.lost_count = 0
+        self.max_lost_frames = 5
+        self.max_tracking_distance = 50
+
         self.picam2 = Picamera2()
         config = self.picam2.create_video_configuration(
             main={"format": "RGB888", "size": (self.width, self.height)}
@@ -25,9 +32,7 @@ class Camera:
 
     def process_frame(self, frame):
         #deal with single frame        
-        find_ball = False
-        error = None
-        candicate = []
+        candidate = []
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         mask = cv2.inRange(hsv, self.lower_white, self.upper_white)
         
@@ -37,17 +42,53 @@ class Camera:
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
         for cnt in contours:
-            self.contour_dealing(cnt, candicate)
-        if len(candicate) > 0:
-            find_ball = True
-        error = self.choose_ball(candicate)
+            self.contour_dealing(frame, cnt, candidate)
+        
+        find_ball, error, target = self.choose_ball(candidate)
+
+        if target is not None:
+            self.draw_target(frame, target)
         return frame, mask, find_ball, error
     
-    def choose_ball(self, candicate):
-        error = min(candicate, key=lambda b: abs(b["error"]))
-        return error
+    def choose_ball(self, candidate):
+        if len(candidate) > 0:
+            if self.target_x is None:
+                target = min(candidate, key=lambda b: abs(b["error"]))
+                distance = 0
+            else:
+                target = min(candidate,key=lambda b: (b["cx"] - self.target_x) ** 2 + (b["cy"] - self.target_y) ** 2)
+                distance = ((target["cx"] - self.target_x) ** 2 +(target["cy"] - self.target_y) ** 2) ** 0.5
 
-    def contour_dealing(self, frame, cnt, candicate):
+            if self.target_x is not None and distance > self.max_tracking_distance:
+                self.lost_count += 1
+                if self.lost_count <= self.max_lost_frames:
+                    return True, self.last_error, None
+                else:
+                    self.target_x = None
+                    self.target_y = None
+                    self.last_error = None
+                    return False, None, None
+
+            self.target_x = target["cx"]
+            self.target_y = target["cy"]
+            error = target["error"]
+            self.last_error = error
+            self.lost_count = 0
+
+            return True, error, target
+
+        else:
+            self.lost_count += 1
+
+            if self.lost_count <= self.max_lost_frames:
+                return True, self.last_error, None
+            else:
+                self.target_x = None
+                self.target_y = None
+                self.last_error = None
+                return False, None, None
+    
+    def contour_dealing(self, frame, cnt, candidate):
             area = cv2.contourArea(cnt)
             if 800 < area < 10000:
                 rect = cv2.minAreaRect(cnt)
@@ -58,7 +99,6 @@ class Camera:
                 
                 ratio = min(w, h) / max(w, h)
                 if ratio > 0.35:
-                    find_ball = True
                     box = cv2.boxPoints(rect)
                     box = np.intp(box)
                     cv2.drawContours(frame, [box], 0, (255, 0, 0), 2)
@@ -67,7 +107,7 @@ class Camera:
                     error_from_center = cx - self.width //2
                     cv2.putText(frame, "Ball", (cx-10, cy-10), 
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
-                    candicate.append({
+                    candidate.append({
                     "contour": cnt,
                     "rect": rect,
                     "area": area,
@@ -77,7 +117,47 @@ class Camera:
                     "ratio": ratio
                 })
 
-        
+    def draw_target(self, frame, target):
+        cx = target["cx"]
+        cy = target["cy"]
+
+        cv2.circle(frame, (cx, cy), 6, (0, 255, 0), -1)
+
+        cv2.putText(
+            frame,
+            "TARGET",
+            (cx - 25, cy + 25),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (0, 255, 0),
+            2
+        )
+
+        cv2.line(
+            frame,
+            (self.width // 2, 0),
+            (self.width // 2, self.height),
+            (0, 255, 255),
+            1
+        )
+
+        cv2.line(
+            frame,
+            (self.width // 2, cy),
+            (cx, cy),
+            (0, 255, 0),
+            2
+        )
+
+        cv2.putText(
+            frame,
+            f"error={target['error']}",
+            (10, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (0, 255, 0),
+            2
+        )
 
     def streaming(self):
         print("Starting tracking... Press 'q' to quit.")
@@ -101,8 +181,8 @@ class Camera:
     def single_test(self, filename="test_capture.jpg"):
         print("capturing photo...")
         raw_frame = self.picam2.capture_array()
-        processed_frame, mask, find_ball = self.process_frame(raw_frame)
-        
+        processed_frame, mask, find_ball, error = self.process_frame(raw_frame)
+        print(f'find_ball: {find_ball}, error: {error}')
         cv2.imwrite(f"/home/waryt/Desktop/{filename}", processed_frame)
         cv2.imwrite(f"/home/waryt/Desktop/mask_{filename}", mask)
         print(f"finish")
