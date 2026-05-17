@@ -31,11 +31,7 @@ class Arduino:
 
         print("found:", arduino_port)
 
-        self.ser = serial.Serial(
-            arduino_port,
-            self.baudrate,
-            timeout=self.timeout
-        )
+        self.ser = serial.Serial(arduino_port, self.baudrate, timeout=self.timeout)
 
         time.sleep(2)
 

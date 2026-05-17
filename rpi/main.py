@@ -47,12 +47,10 @@ def main():
 
                 if abs(error) <= CLOSE_ERROR:
                     state = Status.CLOSE_ENOUGH
-
                     if last_sent_state != state:
                         mega.send(state.value)
                         last_sent_state = state
                         print(state)
-
                 else:
                     state = Status.ERROR
                     mega.send(f"{state.value},{error}")
