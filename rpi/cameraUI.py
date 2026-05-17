@@ -51,10 +51,13 @@ class Camera:
         )
 
         for cnt in contours:
-            self.contour_dealing(frame, cnt, candidate)
+            self.contour_dealing(cnt, candidate)
         
         find_ball, error, target = self.choose_ball(candidate)
 
+        #visualization
+        self.draw_center_line(frame)
+        self.draw_candicate(frame, candidate)
         if target is not None:
             self.draw_target(frame, target)
         return frame, mask, find_ball, error
@@ -89,7 +92,7 @@ class Camera:
         else:
             self.lost_count += 1
 
-            if self.lost_count <= self.max_lost_frames:
+            if self.last_error is not None and self.lost_count <= self.max_lost_frames:
                 return True, self.last_error, None
             else:
                 self.target_x = None
@@ -97,7 +100,7 @@ class Camera:
                 self.last_error = None
                 return False, None, None
     
-    def contour_dealing(self, frame, cnt, candidate):
+    def contour_dealing(self, cnt, candidate):
             area = cv2.contourArea(cnt)
             if 800 < area < 10000:
                 rect = cv2.minAreaRect(cnt)
@@ -107,66 +110,45 @@ class Camera:
                     return
                 
                 ratio = min(w, h) / max(w, h)
-                if ratio > 0.35:
-                    box = cv2.boxPoints(rect)
-                    box = np.intp(box)
-                    cv2.drawContours(frame, [box], 0, (255, 0, 0), 2)
-                    
-                    cx, cy = int(rect[0][0]), int(rect[0][1])
-                    error_from_center = cx - self.width //2
-                    cv2.putText(frame, "Ball", (cx-10, cy-10), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
-                    candidate.append({
-                    "contour": cnt,
-                    "rect": rect,
-                    "area": area,
-                    "cx": cx,
-                    "cy": cy,
-                    "error": error_from_center,
-                    "ratio": ratio
-                })
+                if ratio <= 0.35:
+                    return
+                
+                cx, cy = int(rect[0][0]), int(rect[0][1])
+                error_from_center = cx - self.width // 2
+
+                candidate.append({
+                "contour": cnt,
+                "rect": rect,
+                "area": area,
+                "cx": cx,
+                "cy": cy,
+                "error": error_from_center,
+                "ratio": ratio
+            })
 
     def draw_target(self, frame, target):
         cx = target["cx"]
         cy = target["cy"]
 
         cv2.circle(frame, (cx, cy), 6, (0, 255, 0), -1)
+        cv2.putText(frame,"TARGET",(cx - 25, cy + 25),cv2.FONT_HERSHEY_SIMPLEX,0.5,(0, 255, 0),2)
+        cv2.line(frame,(self.width // 2, cy),(cx, cy),(0, 255, 0),2)
+        cv2.putText(frame,f"error={target['error']}",(10, 30),cv2.FONT_HERSHEY_SIMPLEX,0.6,(0, 255, 0),2)
+    
+    def draw_center_line(self, frame):
+        cv2.line(frame,(self.width // 2, 0),(self.width // 2, self.height),(0, 255, 255),1)
 
-        cv2.putText(
-            frame,
-            "TARGET",
-            (cx - 25, cy + 25),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            (0, 255, 0),
-            2
-        )
+    def draw_candicate(self, frame, candidate):
+        for ball in candidate:
+            box = cv2.boxPoints(ball["rect"])
+            box = np.intp(box)
 
-        cv2.line(
-            frame,
-            (self.width // 2, 0),
-            (self.width // 2, self.height),
-            (0, 255, 255),
-            1
-        )
+            cx = ball["cx"]
+            cy = ball["cy"]
 
-        cv2.line(
-            frame,
-            (self.width // 2, cy),
-            (cx, cy),
-            (0, 255, 0),
-            2
-        )
+            cv2.drawContours(frame, [box], 0, (255, 0, 0), 2)
+            cv2.putText(frame,"Ball",(cx - 10, cy - 10),cv2.FONT_HERSHEY_SIMPLEX,0.5,(0, 0, 255),1)
 
-        cv2.putText(
-            frame,
-            f"error={target['error']}",
-            (10, 30),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (0, 255, 0),
-            2
-        )
     def streaming(self):
         print("Starting tracking... Press 'q' to quit.")
 

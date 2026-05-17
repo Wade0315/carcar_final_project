@@ -5,7 +5,7 @@ import psutil
 import arduino
 # import camera
 #test camera
-import cameraFAKE as camera
+import cameraUI as camera
 
 MISMATCH_TOLERANCE = 5
 class Status(Enum):
@@ -40,10 +40,8 @@ def main():
 
                 if error is None:
                     state = Status.IDLE
-
                 elif abs(error) <= CLOSE_ERROR:
                     state = Status.CLOSE_ENOUGH
-
                 else:
                     state = Status.ERROR
 
@@ -51,7 +49,6 @@ def main():
                     mega.send(f"{state.value},{error}")
                     last_sent_state = state
                     print(state, error)
-
                 else:
                     if last_sent_state != state:
                         mega.send(state.value)
@@ -71,4 +68,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
