@@ -9,8 +9,8 @@ class Camera:
         self.height = height
         self.camera_index = camera_index
 
-        self.lower_white = np.array([0, 0, 180])
-        self.upper_white = np.array([180, 40, 255])
+        self.lower_white = np.array([0, 180, 0])
+        self.upper_white = np.array([180, 255, 40])
         self.kernel_open = np.ones((3, 3), np.uint8)
         self.kernel_close = np.ones((10, 10), np.uint8)
 
@@ -38,8 +38,8 @@ class Camera:
         error = None
         candidate = []
 
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        mask = cv2.inRange(hsv, self.lower_white, self.upper_white)
+        hls = cv2.cvtColor(frame, cv2.COLOR_BGR2HLS)
+        mask = cv2.inRange(hls, self.lower_white, self.upper_white)
 
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.kernel_open)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.kernel_close)
@@ -134,7 +134,7 @@ class Camera:
         cv2.putText(frame,"TARGET",(cx - 25, cy + 25),cv2.FONT_HERSHEY_SIMPLEX,0.5,(0, 255, 0),2)
         cv2.line(frame,(self.width // 2, cy),(cx, cy),(0, 255, 0),2)
         cv2.putText(frame,f"error={target['error']}",(10, 30),cv2.FONT_HERSHEY_SIMPLEX,0.6,(0, 255, 0),2)
-    
+        print(f"area: {target["area"]}, cx: {cx}, cy: {cy}, ratio: {target["ratio"]:.3f}")
     def draw_center_line(self, frame):
         cv2.line(frame,(self.width // 2, 0),(self.width // 2, self.height),(0, 255, 255),1)
 

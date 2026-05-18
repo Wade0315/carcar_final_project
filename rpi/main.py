@@ -46,7 +46,7 @@ def main():
                     state = Status.ERROR
 
                 if state == Status.ERROR:
-                    mega.send(f"{state.value},{error}")
+                    mega.send(f"{state.value} {error}")
                     last_sent_state = state
                     print(state, error)
                 else:

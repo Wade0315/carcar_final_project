@@ -7,8 +7,8 @@ class Camera:
     def __init__(self, width=320, height=240):
         self.width = width
         self.height = height
-        self.lower_white = np.array([0, 0, 180])
-        self.upper_white = np.array([180, 40, 255])
+        self.lower_white = np.array([0, 180, 0])
+        self.upper_white = np.array([180, 255, 40])
         self.kernel_open = np.ones((3, 3), np.uint8)
         self.kernel_close = np.ones((10, 10), np.uint8)
 
@@ -33,8 +33,8 @@ class Camera:
     def process_frame(self, frame):
         #deal with single frame        
         candidate = []
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        mask = cv2.inRange(hsv, self.lower_white, self.upper_white)
+        hls = cv2.cvtColor(frame, cv2.COLOR_BGR2HLS)
+        mask = cv2.inRange(hls, self.lower_white, self.upper_white)
         
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.kernel_open)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.kernel_close)

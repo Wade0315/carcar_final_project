@@ -10,16 +10,16 @@ if frame is None:
 
 roi_frame = frame.copy() 
 
-lower_white = np.array([0, 0, 190])
-upper_white = np.array([180, 40, 255])
+lower_white = np.array([0, 180, 0])
+upper_white = np.array([180, 255, 40])
 
-hsv = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2HSV)
-white_mask = cv2.inRange(hsv, lower_white, upper_white)
+hls = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2HLS)
+white_mask = cv2.inRange(hls, lower_white, upper_white)
 cv2.imshow('1.Pure White Mask', white_mask)
 
 kernel_open = np.ones((3,3), np.uint8)
 white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_OPEN, kernel_open)
-kernel_close = np.ones((15,15), np.uint8)
+kernel_close = np.ones((10,10), np.uint8)
 white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_CLOSE, kernel_close)
 cv2.imshow('2. White Mask', white_mask)
 
