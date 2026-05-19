@@ -26,45 +26,46 @@ def main():
     found_count = 0
     last_sent_state = None
 
-    with camera.Camera() as cam:
-        state = Status.NOT_FOUND
-        mega.send(state.value)
-        last_sent_state = state
+    try:
+        with camera.Camera() as cam:
+            state = Status.NOT_FOUND
+            mega.send(state.value)
+            last_sent_state = state
 
-        for ball_detected, error in cam.streaming():
-            if ball_detected:
-                found_count += 1
+            for ball_detected, error in cam.streaming():
+                if ball_detected:
+                    found_count += 1
 
-                if found_count < FOUND_TOLERANCE:
-                    continue
+                    if found_count < FOUND_TOLERANCE:
+                        continue
 
-                if error is None:
-                    state = Status.IDLE
-                elif abs(error) <= CLOSE_ERROR:
-                    state = Status.CLOSE_ENOUGH
+                    if error is None:
+                        state = Status.IDLE
+                    elif abs(error) <= CLOSE_ERROR:
+                        state = Status.CLOSE_ENOUGH
+                    else:
+                        state = Status.ERROR
+
+                    if state == Status.ERROR:
+                        mega.send(f"{state.value} {error}")
+                        last_sent_state = state
+                        print(state, error)
+                    else:
+                        if last_sent_state != state:
+                            mega.send(state.value)
+                            last_sent_state = state
+                            print(state)
+
                 else:
-                    state = Status.ERROR
+                    found_count = 0
+                    state = Status.NOT_FOUND
 
-                if state == Status.ERROR:
-                    mega.send(f"{state.value} {error}")
-                    last_sent_state = state
-                    print(state, error)
-                else:
                     if last_sent_state != state:
                         mega.send(state.value)
                         last_sent_state = state
                         print(state)
-
-            else:
-                found_count = 0
-                state = Status.NOT_FOUND
-
-                if last_sent_state != state:
-                    mega.send(state.value)
-                    last_sent_state = state
-                    print(state)
-
-    mega.close()
+    finally:
+        mega.close()
 
 if __name__ == "__main__":
     main()

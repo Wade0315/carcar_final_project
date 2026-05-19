@@ -20,6 +20,7 @@ class Camera:
         self.max_tracking_distance = 50
 
         self.picam2 = Picamera2()
+        self.closed = False
         config = self.picam2.create_video_configuration(
             main={"format": "RGB888", "size": (self.width, self.height)}
         )
@@ -78,7 +79,7 @@ class Camera:
         else:
             self.lost_count += 1
 
-            if self.lost_count <= self.max_lost_frames:
+            if self.last_error is not None and self.lost_count <= self.max_lost_frames:
                 return True, self.last_error, None
             else:
                 self.target_x = None
@@ -113,6 +114,10 @@ class Camera:
     def streaming(self):
         print("Starting tracking... Press 'q' to quit.")
         at_frame = 0
+        processed_frame = None
+        mask = None
+        find_ball = False
+        error = None
         try:
             while True:
                 raw_frame = self.picam2.capture_array()
@@ -120,8 +125,10 @@ class Camera:
                     processed_frame, mask, find_ball, error = self.process_frame(raw_frame)
                 yield find_ball, error            
                 at_frame += 1
-                cv2.imshow('Robot View', processed_frame)
-                cv2.imshow('White Mask', mask)
+                if processed_frame is not None:
+                    cv2.imshow('Robot View', processed_frame)
+                if mask is not None:
+                    cv2.imshow('White Mask', mask)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
         except KeyboardInterrupt:
@@ -139,8 +146,11 @@ class Camera:
         print(f"finish")
     
     def close(self):
+        if self.closed:
+            return
         self.picam2.stop()
         cv2.destroyAllWindows()
+        self.closed = True
         print("Camera and Windows closed.")
 
     def __enter__(self):

@@ -22,6 +22,7 @@ class Camera:
         self.max_tracking_distance = 50
 
         self.cap = cv2.VideoCapture(self.camera_index)
+        self.closed = False
 
         if not self.cap.isOpened():
             raise RuntimeError("Cannot open camera")
@@ -134,7 +135,7 @@ class Camera:
         cv2.putText(frame,"TARGET",(cx - 25, cy + 25),cv2.FONT_HERSHEY_SIMPLEX,0.5,(0, 255, 0),2)
         cv2.line(frame,(self.width // 2, cy),(cx, cy),(0, 255, 0),2)
         cv2.putText(frame,f"error={target['error']}",(10, 30),cv2.FONT_HERSHEY_SIMPLEX,0.6,(0, 255, 0),2)
-        print(f"area: {target["area"]}, cx: {cx}, cy: {cy}, ratio: {target["ratio"]:.3f}")
+        print(f"area: {target['area']}, cx: {cx}, cy: {cy}, ratio: {target['ratio']:.3f}")
     def draw_center_line(self, frame):
         cv2.line(frame,(self.width // 2, 0),(self.width // 2, self.height),(0, 255, 255),1)
 
@@ -211,8 +212,11 @@ class Camera:
         print("error:", error)
 
     def close(self):
+        if self.closed:
+            return
         self.cap.release()
         cv2.destroyAllWindows()
+        self.closed = True
         print("Camera and Windows closed.")
 
     def __enter__(self):
