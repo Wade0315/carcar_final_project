@@ -1,6 +1,22 @@
 import cv2
 import numpy as np
 import time
+import logging
+import os
+
+logger = logging.getLogger(__name__)
+
+
+def setup_logging():
+    level_name = os.getenv("LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    logger.info("logging initialized level=%s", logging.getLevelName(level))
 
 
 class Camera:
@@ -30,7 +46,7 @@ class Camera:
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
 
-        print("camera activating...")
+        logger.info("camera activating...")
         time.sleep(2)
 
     def process_frame(self, frame):
@@ -135,7 +151,7 @@ class Camera:
         cv2.putText(frame,"TARGET",(cx - 25, cy + 25),cv2.FONT_HERSHEY_SIMPLEX,0.5,(0, 255, 0),2)
         cv2.line(frame,(self.width // 2, cy),(cx, cy),(0, 255, 0),2)
         cv2.putText(frame,f"error={target['error']}",(10, 30),cv2.FONT_HERSHEY_SIMPLEX,0.6,(0, 255, 0),2)
-        print(f"area: {target['area']}, cx: {cx}, cy: {cy}, ratio: {target['ratio']:.3f}")
+        logger.debug("target area=%s cx=%s cy=%s ratio=%.3f",target["area"],cx,cy,target["ratio"])
     def draw_center_line(self, frame):
         cv2.line(frame,(self.width // 2, 0),(self.width // 2, self.height),(0, 255, 255),1)
 
@@ -151,7 +167,7 @@ class Camera:
             cv2.putText(frame,"Ball",(cx - 10, cy - 10),cv2.FONT_HERSHEY_SIMPLEX,0.5,(0, 0, 255),1)
 
     def streaming(self):
-        print("Starting tracking... Press 'q' to quit.")
+        logger.info("Starting tracking... Press 'q' to quit.")
 
         at_frame = 0
         processed_frame = None
@@ -164,7 +180,7 @@ class Camera:
                 ret, raw_frame = self.cap.read()
 
                 if not ret:
-                    print("Failed to read frame")
+                    logger.warning("Failed to read frame")
                     break
 
                 raw_frame = cv2.resize(raw_frame, (self.width, self.height))
@@ -186,30 +202,28 @@ class Camera:
                     break
 
         except KeyboardInterrupt:
-            print("\nStopped by user")
+            logger.info("Stopped by user")
 
         finally:
             self.close()
 
     def single_test(self, filename="test_capture.jpg"):
-        print("capturing photo...")
+        logger.info("capturing photo...")
 
         ret, raw_frame = self.cap.read()
 
         if not ret:
-            print("Failed to capture photo")
+            logger.warning("Failed to capture photo")
             return
 
         raw_frame = cv2.resize(raw_frame, (self.width, self.height))
 
         processed_frame, mask, find_ball, error = self.process_frame(raw_frame)
-        print(f'find_ball: {find_ball}, error: {error}')
+        logger.info("find_ball=%s error=%s", find_ball, error)
         cv2.imwrite(filename, processed_frame)
         cv2.imwrite(f"mask_{filename}", mask)
 
-        print("finish")
-        print("find_ball:", find_ball)
-        print("error:", error)
+        logger.info("finish")
 
     def close(self):
         if self.closed:
@@ -217,7 +231,7 @@ class Camera:
         self.cap.release()
         cv2.destroyAllWindows()
         self.closed = True
-        print("Camera and Windows closed.")
+        logger.info("Camera and Windows closed.")
 
     def __enter__(self):
         return self
@@ -227,7 +241,8 @@ class Camera:
 
 
 if __name__ == "__main__":
+    setup_logging()
     with Camera() as tracker:
         # tracker.single_test()
         for find_ball, error in tracker.streaming():
-            print("find_ball:", find_ball, "error:", error)
+            logger.info("find_ball=%s error=%s", find_ball, error)

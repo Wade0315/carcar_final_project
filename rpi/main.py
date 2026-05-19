@@ -1,5 +1,6 @@
 import os
 import time
+import logging
 from enum import Enum
 import psutil
 import arduino
@@ -18,6 +19,20 @@ class Status(Enum):
 MISMATCH_TOLERANCE = 5      
 FOUND_TOLERANCE = 2         
 CLOSE_ERROR = 20           
+
+logger = logging.getLogger(__name__)
+
+
+def setup_logging():
+    level_name = os.getenv("LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    logger.info("logging initialized level=%s", logging.getLevelName(level))
 
 
 def main():
@@ -49,12 +64,12 @@ def main():
                     if state == Status.ERROR:
                         mega.send(f"{state.value} {error}")
                         last_sent_state = state
-                        print(state, error)
+                        logger.info("%s error=%s", state.name, error)
                     else:
                         if last_sent_state != state:
                             mega.send(state.value)
                             last_sent_state = state
-                            print(state)
+                            logger.info("%s", state.name)
 
                 else:
                     found_count = 0
@@ -63,9 +78,10 @@ def main():
                     if last_sent_state != state:
                         mega.send(state.value)
                         last_sent_state = state
-                        print(state)
+                        logger.info("%s", state.name)
     finally:
         mega.close()
 
 if __name__ == "__main__":
+    setup_logging()
     main()

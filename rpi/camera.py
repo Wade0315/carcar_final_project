@@ -1,7 +1,24 @@
 import cv2
 import numpy as np
 import time
+import logging
+import os
 from picamera2 import Picamera2
+
+logger = logging.getLogger(__name__)
+
+
+def setup_logging():
+    level_name = os.getenv("LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    logger.info("logging initialized level=%s", logging.getLevelName(level))
+
 
 class Camera:
     def __init__(self, width=320, height=240):
@@ -28,7 +45,7 @@ class Camera:
         self.picam2.start()
         self.picam2.set_controls({"AwbMode": 0})
         
-        print("camera activating...")
+        logger.info("camera activating...")
         time.sleep(2)
 
     def process_frame(self, frame):
@@ -112,7 +129,7 @@ class Camera:
 
 
     def streaming(self):
-        print("Starting tracking... Press 'q' to quit.")
+        logger.info("Starting tracking... Press 'q' to quit.")
         at_frame = 0
         processed_frame = None
         mask = None
@@ -132,18 +149,18 @@ class Camera:
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
         except KeyboardInterrupt:
-            print("\nStopped by user")
+            logger.info("Stopped by user")
         finally:
             self.close()
         
     def single_test(self, filename="test_capture.jpg"):
-        print("capturing photo...")
+        logger.info("capturing photo...")
         raw_frame = self.picam2.capture_array()
         processed_frame, mask, find_ball, error = self.process_frame(raw_frame)
-        print(f'find_ball: {find_ball}, error: {error}')
+        logger.info("find_ball=%s error=%s", find_ball, error)
         cv2.imwrite(f"/home/waryt/Desktop/{filename}", processed_frame)
         cv2.imwrite(f"/home/waryt/Desktop/mask_{filename}", mask)
-        print(f"finish")
+        logger.info("finish")
     
     def close(self):
         if self.closed:
@@ -151,7 +168,7 @@ class Camera:
         self.picam2.stop()
         cv2.destroyAllWindows()
         self.closed = True
-        print("Camera and Windows closed.")
+        logger.info("Camera and Windows closed.")
 
     def __enter__(self):
         return self
@@ -160,6 +177,7 @@ class Camera:
         self.close()
 
 if __name__ == "__main__":
+    setup_logging()
     with Camera() as tracker:
         tracker.single_test()        
         #tracker.streaming()

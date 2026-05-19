@@ -1,7 +1,9 @@
 import serial
 import serial.tools.list_ports
 import time
+import logging
 
+logger = logging.getLogger(__name__)
 
 class Arduino:
     def __init__(self, baudrate=9600, timeout=1):
@@ -26,10 +28,10 @@ class Arduino:
         arduino_port = self.find_arduino()
 
         if not arduino_port:
-            print("arduino not found")
+            logger.warning("arduino not found")
             return
 
-        print("found:", arduino_port)
+        logger.info("found arduino: %s", arduino_port)
 
         self.ser = serial.Serial(arduino_port, self.baudrate, timeout=self.timeout)
 
@@ -37,17 +39,18 @@ class Arduino:
 
     def send(self, msg):
         if self.ser is None:
-            #print("serial not connected")
+            logger.debug("serial not connected, skip send: %s", msg)
             return
         msg = str(msg)
         if not msg.endswith("\n"):
             msg += "\n"
 
         self.ser.write(msg.encode())
+        logger.debug("sent: %s", msg.strip())
 
     def receive(self, wait_time=0.5):
         if self.ser is None:
-            print("serial not connected")
+            logger.warning("serial not connected")
             return None
 
         start = time.time()
@@ -55,6 +58,7 @@ class Arduino:
         while time.time() - start < wait_time:
             if self.ser.in_waiting > 0:
                 msg = self.ser.readline().decode(errors="ignore").strip()
+                logger.debug("received: %s", msg)
                 return msg
 
             time.sleep(0.01)
@@ -65,6 +69,7 @@ class Arduino:
         if self.ser is not None:
             self.ser.close()
             self.ser = None
+            logger.info("serial closed")
 
     def __enter__(self):
         return self
