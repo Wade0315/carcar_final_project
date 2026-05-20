@@ -105,8 +105,8 @@ class CameraBase:
         if w == 0 or h == 0:
             return
 
-        ratio = min(w, h) / max(w, h)
-        if ratio <= 0.35:
+        w_h_ratio = min(w, h) / max(w, h)
+        if w_h_ratio <= 0.35:
             return
 
         cx, cy = int(rect[0][0]), int(rect[0][1])
@@ -125,7 +125,7 @@ class CameraBase:
             "cx": cx,
             "cy": cy,
             "error": error_from_center,
-            "ratio": ratio
+            "w_h_ratio": w_h_ratio
         })
 
     def choose_ball(self, candidate):
