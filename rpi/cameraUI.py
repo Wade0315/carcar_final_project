@@ -114,7 +114,7 @@ class Camera:
         find_ball, error, target = self.choose_ball(candidate)
 
         self.visualize_frame(frame, floor_mask, candidate, target)
-        return frame, badminton_mask, find_ball, error
+        return frame, floor_mask, badminton_mask, find_ball, error
     
     def choose_ball(self, candidate):
         if len(candidate) > 0:
@@ -225,6 +225,7 @@ class Camera:
 
         at_frame = 0
         processed_frame = None
+        floor_mask = None
         badminton_mask = None
         find_ball = False
         error = None
@@ -240,14 +241,15 @@ class Camera:
                 raw_frame = cv2.resize(raw_frame, (self.width, self.height))
 
                 if at_frame % 3 == 0:
-                    processed_frame, badminton_mask, find_ball, error = self.process_frame(raw_frame)
+                    processed_frame, floor_mask, badminton_mask, find_ball, error = self.process_frame(raw_frame)
                     yield find_ball, error
 
                 if processed_frame is not None:
                     cv2.imshow("Robot View", processed_frame)
 
-                if badminton_mask is not None:
-                    cv2.imshow("White Mask", badminton_mask)
+                if badminton_mask is not None and floor_mask is not None:
+                    display_mask = cv2.bitwise_and(badminton_mask, badminton_mask, mask=floor_mask)
+                    cv2.imshow("White Mask", display_mask)
 
                 at_frame += 1
 
@@ -271,10 +273,11 @@ class Camera:
 
         raw_frame = cv2.resize(raw_frame, (self.width, self.height))
 
-        processed_frame, mask, find_ball, error = self.process_frame(raw_frame)
+        processed_frame, floor_mask, badminton_mask, find_ball, error = self.process_frame(raw_frame)
         logger.info("find_ball=%s error=%s", find_ball, error)
         cv2.imwrite(filename, processed_frame)
-        cv2.imwrite(f"mask_{filename}", mask)
+        display_mask = cv2.bitwise_and(badminton_mask, badminton_mask, mask=floor_mask)
+        cv2.imwrite(f"mask_{filename}", display_mask)
 
         logger.info("finish")
 

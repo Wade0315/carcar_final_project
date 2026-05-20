@@ -110,7 +110,7 @@ class Camera:
         
         find_ball, error, target = self.choose_ball(candidate)
 
-        return frame, badminton_mask, find_ball, error
+        return frame, floor_mask, badminton_mask, find_ball, error
 
     def contour_dealing(self, cnt, candidate, floor_mask):
         area = cv2.contourArea(cnt)
@@ -182,6 +182,7 @@ class Camera:
         logger.info("Starting tracking... Press 'q' to quit.")
         at_frame = 0
         processed_frame = None
+        floor_mask = None
         badminton_mask = None
         find_ball = False
         error = None
@@ -189,13 +190,14 @@ class Camera:
             while True:
                 raw_frame = self.picam2.capture_array()
                 if at_frame % 3 == 0:
-                    processed_frame, badminton_mask, find_ball, error = self.process_frame(raw_frame)
+                    processed_frame, floor_mask, badminton_mask, find_ball, error = self.process_frame(raw_frame)
                     yield find_ball, error            
                 at_frame += 1
                 if processed_frame is not None:
                     cv2.imshow('Robot View', processed_frame)
-                if badminton_mask is not None:
-                    cv2.imshow('White Mask', badminton_mask)
+                if badminton_mask is not None and floor_mask is not None:
+                    display_mask = cv2.bitwise_and(badminton_mask, badminton_mask, mask=floor_mask)
+                    cv2.imshow('White Mask', display_mask)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
         except KeyboardInterrupt:
@@ -206,10 +208,11 @@ class Camera:
     def single_test(self, filename="test_capture.jpg"):
         logger.info("capturing photo...")
         raw_frame = self.picam2.capture_array()
-        processed_frame, mask, find_ball, error = self.process_frame(raw_frame)
+        processed_frame, floor_mask, badminton_mask, find_ball, error = self.process_frame(raw_frame)
         logger.info("find_ball=%s error=%s", find_ball, error)
         cv2.imwrite(f"/home/waryt/Desktop/{filename}", processed_frame)
-        cv2.imwrite(f"/home/waryt/Desktop/mask_{filename}", mask)
+        display_mask = cv2.bitwise_and(badminton_mask, badminton_mask, mask=floor_mask)
+        cv2.imwrite(f"/home/waryt/Desktop/mask_{filename}", display_mask)
         logger.info("finish")
     
     def close(self):
