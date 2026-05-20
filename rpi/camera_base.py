@@ -73,8 +73,12 @@ class CameraBase:
         return badminton_mask
 
     def build_display_mask(self, floor_mask, badminton_mask):
-        return cv2.bitwise_and(badminton_mask, badminton_mask, mask=floor_mask)
+            if not self.has_floor(floor_mask):
+                return badminton_mask
+            return cv2.bitwise_and(badminton_mask, badminton_mask, mask=floor_mask)
 
+    def has_floor(self, floor_mask):
+        return cv2.countNonZero(floor_mask) >= self.min_floor_area
     def detect_frame(self, frame):
         candidate = []
         floor_mask = self.build_floor_mask(frame)
@@ -108,9 +112,11 @@ class CameraBase:
         cx, cy = int(rect[0][0]), int(rect[0][1])
         if not (0 <= cx < self.width and 0 <= cy < self.height):
             return
-        if floor_mask[cy, cx] == 0:
+        cx, cy = int(rect[0][0]), int(rect[0][1])
+        if not (0 <= cx < self.width and 0 <= cy < self.height):
             return
-
+        if self.has_floor(floor_mask) and floor_mask[cy, cx] == 0:
+            return
         error_from_center = cx - self.width // 2
         candidate.append({
             "contour": cnt,
