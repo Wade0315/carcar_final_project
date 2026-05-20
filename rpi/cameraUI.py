@@ -24,12 +24,20 @@ class Camera:
         self.width = width
         self.height = height
         self.camera_index = camera_index
-
+        #badminton
         self.lower_white = np.array([0, 180, 0])
         self.upper_white = np.array([180, 255, 40])
+        self.lower_floor = np.array([35, 40, 20])
         self.kernel_open = np.ones((3, 3), np.uint8)
         self.kernel_close = np.ones((10, 10), np.uint8)
-
+        #floor
+        self.upper_floor = np.array([95, 255, 180])
+        self.floor_kernel_open = np.ones((5, 5), np.uint8)
+        self.floor_kernel_close = np.ones((21, 21), np.uint8)
+        self.floor_boundary_margin = 0
+        self.floor_bottom_band_ratio = 0.75
+        self.min_floor_area = int(self.width * self.height * 0.03)
+        #target
         self.target_x = None
         self.target_y = None
         self.last_error = None
@@ -49,35 +57,64 @@ class Camera:
         logger.info("camera activating...")
         time.sleep(2)
 
+    def build_floor_mask(self, frame):
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        green_mask = cv2.inRange(hsv, self.lower_floor, self.upper_floor)
+        green_mask = cv2.morphologyEx(green_mask, cv2.MORPH_OPEN, self.floor_kernel_open)
+        green_mask = cv2.morphologyEx(green_mask, cv2.MORPH_CLOSE, self.floor_kernel_close)
+
+        contours, _ = cv2.findContours(green_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        floor_mask = np.zeros((self.height, self.width), dtype=np.uint8)
+        if not contours:
+            return floor_mask
+
+        bottom_y = int(self.height * self.floor_bottom_band_ratio)
+        floor_contours = []
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            _, y, _, h = cv2.boundingRect(cnt)
+            reaches_bottom_band = y + h >= bottom_y
+
+            if area >= self.min_floor_area and reaches_bottom_band:
+                floor_contours.append(cnt)
+
+        if not floor_contours:
+            return floor_mask
+
+        floor_hulls = [cv2.convexHull(cnt) for cnt in floor_contours]
+        cv2.drawContours(floor_mask, floor_hulls, -1, 255, -1)
+        if self.floor_boundary_margin > 0:
+            margin_kernel = np.ones(
+                (self.floor_boundary_margin, self.floor_boundary_margin),
+                np.uint8
+            )
+            floor_mask = cv2.erode(floor_mask, margin_kernel)
+        return floor_mask
+
+    def build_badminton_mask(self, frame):
+        hls = cv2.cvtColor(frame, cv2.COLOR_BGR2HLS)
+        badminton_mask = cv2.inRange(hls, self.lower_white, self.upper_white)
+        badminton_mask = cv2.morphologyEx(badminton_mask, cv2.MORPH_OPEN, self.kernel_open)
+        badminton_mask = cv2.morphologyEx(badminton_mask, cv2.MORPH_CLOSE, self.kernel_close)
+        return badminton_mask
+
     def process_frame(self, frame):
         # deal with single frame
         find_ball = False
         error = None
         candidate = []
 
-        hls = cv2.cvtColor(frame, cv2.COLOR_BGR2HLS)
-        mask = cv2.inRange(hls, self.lower_white, self.upper_white)
-
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.kernel_open)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.kernel_close)
-
-        contours, _ = cv2.findContours(
-            mask,
-            cv2.RETR_EXTERNAL,
-            cv2.CHAIN_APPROX_SIMPLE
-        )
+        floor_mask = self.build_floor_mask(frame)
+        badminton_mask = self.build_badminton_mask(frame)
+        contours, _ = cv2.findContours(badminton_mask,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
 
         for cnt in contours:
-            self.contour_dealing(cnt, candidate)
+            self.contour_dealing(cnt, candidate, floor_mask)
         
         find_ball, error, target = self.choose_ball(candidate)
 
-        #visualization
-        self.draw_center_line(frame)
-        self.draw_candicate(frame, candidate)
-        if target is not None:
-            self.draw_target(frame, target)
-        return frame, mask, find_ball, error
+        self.visualize_frame(frame, floor_mask, candidate, target)
+        return frame, badminton_mask, find_ball, error
     
     def choose_ball(self, candidate):
         if len(candidate) > 0:
@@ -117,7 +154,7 @@ class Camera:
                 self.last_error = None
                 return False, None, None
     
-    def contour_dealing(self, cnt, candidate):
+    def contour_dealing(self, cnt, candidate, floor_mask):
             area = cv2.contourArea(cnt)
             if 800 < area < 10000:
                 rect = cv2.minAreaRect(cnt)
@@ -131,6 +168,11 @@ class Camera:
                     return
                 
                 cx, cy = int(rect[0][0]), int(rect[0][1])
+                if not (0 <= cx < self.width and 0 <= cy < self.height):
+                    return
+                if floor_mask[cy, cx] == 0:
+                    return
+
                 error_from_center = cx - self.width // 2
 
                 candidate.append({
@@ -152,8 +194,20 @@ class Camera:
         cv2.line(frame,(self.width // 2, cy),(cx, cy),(0, 255, 0),2)
         cv2.putText(frame,f"error={target['error']}",(10, 30),cv2.FONT_HERSHEY_SIMPLEX,0.6,(0, 255, 0),2)
         logger.debug("target area=%s cx=%s cy=%s ratio=%.3f",target["area"],cx,cy,target["ratio"])
+
+    def visualize_frame(self, frame, floor_mask, candidate, target):
+        self.draw_center_line(frame)
+        self.draw_floor_boundary(frame, floor_mask)
+        self.draw_candicate(frame, candidate)
+        if target is not None:
+            self.draw_target(frame, target)
+
     def draw_center_line(self, frame):
         cv2.line(frame,(self.width // 2, 0),(self.width // 2, self.height),(0, 255, 255),1)
+
+    def draw_floor_boundary(self, frame, floor_mask):
+        contours, _ = cv2.findContours(floor_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cv2.drawContours(frame, contours, -1, (255, 0, 255), 3)
 
     def draw_candicate(self, frame, candidate):
         for ball in candidate:
@@ -171,7 +225,7 @@ class Camera:
 
         at_frame = 0
         processed_frame = None
-        mask = None
+        badminton_mask = None
         find_ball = False
         error = None
 
@@ -186,15 +240,14 @@ class Camera:
                 raw_frame = cv2.resize(raw_frame, (self.width, self.height))
 
                 if at_frame % 3 == 0:
-                    processed_frame, mask, find_ball, error = self.process_frame(raw_frame)
-
-                yield find_ball, error
+                    processed_frame, badminton_mask, find_ball, error = self.process_frame(raw_frame)
+                    yield find_ball, error
 
                 if processed_frame is not None:
                     cv2.imshow("Robot View", processed_frame)
 
-                if mask is not None:
-                    cv2.imshow("White Mask", mask)
+                if badminton_mask is not None:
+                    cv2.imshow("White Mask", badminton_mask)
 
                 at_frame += 1
 
