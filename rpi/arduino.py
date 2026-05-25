@@ -2,8 +2,21 @@ import serial
 import serial.tools.list_ports
 import time
 import logging
+import os
 
 logger = logging.getLogger(__name__)
+
+
+def setup_logging():
+    level_name = os.getenv("LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    logger.info("logging initialized level=%s", logging.getLevelName(level))
 
 class Arduino:
     def __init__(self, baudrate=9600, timeout=1):
@@ -18,6 +31,7 @@ class Arduino:
 
         for port in ports:
             desc = port.description.lower()
+            logger.debug("port device=%s desc=%s hwid=%s", port.device, port.description, port.hwid)
 
             if any(k in desc for k in keywords):
                 return port.device
@@ -36,6 +50,9 @@ class Arduino:
         self.ser = serial.Serial(arduino_port, self.baudrate, timeout=self.timeout)
 
         time.sleep(2)
+        self.ser.reset_input_buffer()
+        self.ser.reset_output_buffer()
+        logger.info("serial connected baudrate=%s", self.baudrate)
 
     def send(self, msg):
         if self.ser is None:
@@ -76,3 +93,22 @@ class Arduino:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
+
+if __name__ == "__main__":
+    setup_logging()
+    mega = Arduino()
+    if mega.ser is None:
+        raise SystemExit(1)
+
+    logger.info("sending test message")
+    mega.send("Hi")
+    logger.info("waiting for Arduino messages... Press Ctrl+C to quit.")
+    try:
+        while True:
+            msg = mega.receive()
+            if msg:
+                print(msg)
+    except KeyboardInterrupt:
+        logger.info("Stopped by user")
+    finally:
+        mega.close()
