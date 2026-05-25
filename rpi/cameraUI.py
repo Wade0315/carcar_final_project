@@ -21,8 +21,8 @@ def setup_logging():
 
 
 class Camera(CameraBase):
-    def __init__(self, width=320, height=240, camera_index=0):
-        super().__init__(width, height)
+    def __init__(self, width=320, height=240, camera_index=0, flip_code=-1):
+        super().__init__(width, height, flip_code)
         self.camera_index = camera_index
 
         self.cap = cv2.VideoCapture(self.camera_index)
@@ -43,14 +43,14 @@ class Camera(CameraBase):
         return frame, floor_mask, badminton_mask, find_ball, error
 
     def draw_target(self, frame, target):
-        cx = target["cx"]
-        cy = target["cy"]
+        target_cx = target["target_cx"]
+        target_cy = target["target_cy"]
 
-        cv2.circle(frame, (cx, cy), 6, (0, 255, 0), -1)
-        cv2.putText(frame,"TARGET",(cx - 25, cy + 25),cv2.FONT_HERSHEY_SIMPLEX,0.5,(0, 255, 0),2)
-        cv2.line(frame,(self.width // 2, cy),(cx, cy),(0, 255, 0),2)
+        cv2.circle(frame, (target_cx, target_cy), 6, (0, 255, 0), -1)
+        cv2.putText(frame,"TARGET",(target_cx - 25, target_cy + 25),cv2.FONT_HERSHEY_SIMPLEX,0.5,(0, 255, 0),2)
+        cv2.line(frame,(self.width // 2, target_cy),(target_cx, target_cy),(0, 255, 0),2)
         cv2.putText(frame,f"error={target['error']}",(10, 30),cv2.FONT_HERSHEY_SIMPLEX,0.6,(0, 255, 0),2)
-        logger.debug("target area=%s cx=%s cy=%s ratio=%.3f",target["area"],cx,cy,target["ratio"])
+        logger.debug("target area=%s target_cx=%s target_cy=%s ratio=%.3f head_found=%s",target["area"],target_cx,target_cy,target["w_h_ratio"],target["head_found"])
 
     def visualize_frame(self, frame, floor_mask, candidate, target):
         self.draw_center_line(frame)
@@ -71,11 +71,18 @@ class Camera(CameraBase):
             box = cv2.boxPoints(ball["rect"])
             box = np.intp(box)
 
-            cx = ball["cx"]
-            cy = ball["cy"]
+            target_cx = ball["target_cx"]
+            target_cy = ball["target_cy"]
+            rect_cx = ball["rect_cx"]
+            rect_cy = ball["rect_cy"]
 
             cv2.drawContours(frame, [box], 0, (255, 0, 0), 2)
-            cv2.putText(frame,"Ball",(cx - 10, cy - 10),cv2.FONT_HERSHEY_SIMPLEX,0.5,(0, 0, 255),1)
+            cv2.circle(frame, (rect_cx, rect_cy), 3, (255, 255, 0), -1)
+            if ball["head_found"]:
+                cv2.circle(frame, (target_cx, target_cy), 4, (0, 0, 255), -1)
+                cv2.putText(frame,"Head",(target_cx - 12, target_cy - 10),cv2.FONT_HERSHEY_SIMPLEX,0.5,(0, 0, 255),1)
+            else:
+                cv2.putText(frame,"Ball",(target_cx - 10, target_cy - 10),cv2.FONT_HERSHEY_SIMPLEX,0.5,(0, 0, 255),1)
 
     def streaming(self):
         logger.info("Starting tracking... Press 'q' to quit.")
@@ -96,6 +103,7 @@ class Camera(CameraBase):
                     break
 
                 raw_frame = cv2.resize(raw_frame, (self.width, self.height))
+                raw_frame = self.fix_orientation(raw_frame)
 
                 if at_frame % 3 == 0:
                     processed_frame, floor_mask, badminton_mask, find_ball, error = self.process_frame(raw_frame)
@@ -129,6 +137,7 @@ class Camera(CameraBase):
             return
 
         raw_frame = cv2.resize(raw_frame, (self.width, self.height))
+        raw_frame = self.fix_orientation(raw_frame)
 
         processed_frame, floor_mask, badminton_mask, find_ball, error = self.process_frame(raw_frame)
         logger.info("find_ball=%s error=%s", find_ball, error)
@@ -148,7 +157,7 @@ class Camera(CameraBase):
 
 if __name__ == "__main__":
     setup_logging()
-    with Camera() as tracker:
+    with Camera(flip_code=None) as tracker:
         # tracker.single_test()
         for find_ball, error in tracker.streaming():
             logger.info("find_ball=%s error=%s", find_ball, error)

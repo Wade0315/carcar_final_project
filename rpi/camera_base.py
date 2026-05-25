@@ -7,9 +7,10 @@ logger = logging.getLogger(__name__)
 
 
 class CameraBase:
-    def __init__(self, width=320, height=240):
+    def __init__(self, width=320, height=240, flip_code=-1):
         self.width = width
         self.height = height
+        self.flip_code = flip_code
 
         self.lower_white = np.array([0, 180, 0])
         self.upper_white = np.array([180, 255, 40])
@@ -30,6 +31,60 @@ class CameraBase:
         self.lost_count = 0
         self.max_lost_frames = 5
         self.max_tracking_distance = 50
+        self.head_end_band_ratio = 0.25
+        self.head_width_ratio = 0.85
+
+    def fix_orientation(self, frame):
+        if self.flip_code is None:
+            return frame
+        return cv2.flip(frame, self.flip_code)
+
+    def estimate_head_from_long_axis(self, cnt, rect):
+        points = cnt.reshape(-1, 2).astype(np.float32)
+        if len(points) < 6:
+            return None
+
+        center = np.array(rect[0], dtype=np.float32)
+        box = cv2.boxPoints(rect).astype(np.float32)
+        edges = [box[(i + 1) % 4] - box[i] for i in range(4)]
+        long_axis = max(edges, key=lambda edge: np.linalg.norm(edge))
+        axis_length = np.linalg.norm(long_axis)
+        if axis_length <= 0:
+            return None
+
+        long_axis = long_axis / axis_length
+        short_axis = np.array([-long_axis[1], long_axis[0]], dtype=np.float32)
+
+        relative_points = points - center
+        long_projection = relative_points @ long_axis
+        short_projection = relative_points @ short_axis
+        min_projection = float(np.min(long_projection))
+        max_projection = float(np.max(long_projection))
+        projection_span = max_projection - min_projection
+        if projection_span < 8:
+            return None
+
+        band_width = max(projection_span * self.head_end_band_ratio, 4)
+        low_end = short_projection[long_projection <= min_projection + band_width]
+        high_end = short_projection[long_projection >= max_projection - band_width]
+        if len(low_end) < 3 or len(high_end) < 3:
+            return None
+
+        low_width = float(np.max(low_end) - np.min(low_end))
+        high_width = float(np.max(high_end) - np.min(high_end))
+        narrow_width = min(low_width, high_width)
+        wide_width = max(low_width, high_width)
+        if wide_width <= 0 or narrow_width / wide_width > self.head_width_ratio:
+            return None
+
+        head_projection = min_projection if low_width < high_width else max_projection
+        head_point = center + long_axis * head_projection
+        head_x = int(round(head_point[0]))
+        head_y = int(round(head_point[1]))
+        if not (0 <= head_x < self.width and 0 <= head_y < self.height):
+            return None
+
+        return head_x, head_y
 
     def build_floor_mask(self, frame):
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
@@ -109,23 +164,31 @@ class CameraBase:
         if w_h_ratio <= 0.35:
             return
 
-        cx, cy = int(rect[0][0]), int(rect[0][1])
-        if not (0 <= cx < self.width and 0 <= cy < self.height):
+        rect_cx, rect_cy = int(rect[0][0]), int(rect[0][1])
+        if not (0 <= rect_cx < self.width and 0 <= rect_cy < self.height):
             return
-        cx, cy = int(rect[0][0]), int(rect[0][1])
-        if not (0 <= cx < self.width and 0 <= cy < self.height):
+        if self.has_floor(floor_mask) and floor_mask[rect_cy, rect_cx] == 0:
             return
-        if self.has_floor(floor_mask) and floor_mask[cy, cx] == 0:
-            return
-        error_from_center = cx - self.width // 2
+
+        head = self.estimate_head_from_long_axis(cnt, rect)
+        head_found = head is not None
+        if head_found:
+            target_cx, target_cy = head
+        else:
+            target_cx, target_cy = rect_cx, rect_cy
+
+        error_from_center = target_cx - self.width // 2
         candidate.append({
             "contour": cnt,
             "rect": rect,
             "area": area,
-            "cx": cx,
-            "cy": cy,
+            "rect_cx": rect_cx,
+            "rect_cy": rect_cy,
+            "target_cx": target_cx,
+            "target_cy": target_cy,
             "error": error_from_center,
-            "w_h_ratio": w_h_ratio
+            "w_h_ratio": w_h_ratio,
+            "head_found": head_found
         })
 
     def choose_ball(self, candidate):
@@ -136,12 +199,12 @@ class CameraBase:
             else:
                 target = min(
                     candidate,
-                    key=lambda b: (b["cx"] - self.target_x) ** 2
-                    + (b["cy"] - self.target_y) ** 2
+                    key=lambda b: (b["target_cx"] - self.target_x) ** 2
+                    + (b["target_cy"] - self.target_y) ** 2
                 )
                 distance = (
-                    (target["cx"] - self.target_x) ** 2
-                    + (target["cy"] - self.target_y) ** 2
+                    (target["target_cx"] - self.target_x) ** 2
+                    + (target["target_cy"] - self.target_y) ** 2
                 ) ** 0.5
 
             if self.target_x is not None and distance > self.max_tracking_distance:
@@ -154,8 +217,8 @@ class CameraBase:
                 self.last_error = None
                 return False, None, None
 
-            self.target_x = target["cx"]
-            self.target_y = target["cy"]
+            self.target_x = target["target_cx"]
+            self.target_y = target["target_cy"]
             error = target["error"]
             self.last_error = error
             self.lost_count = 0

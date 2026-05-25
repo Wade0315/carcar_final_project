@@ -21,8 +21,8 @@ def setup_logging():
 
 
 class Camera(CameraBase):
-    def __init__(self, width=320, height=240):
-        super().__init__(width, height)
+    def __init__(self, width=320, height=240, flip_code=-1):
+        super().__init__(width, height, flip_code)
 
         self.picam2 = Picamera2()
         self.closed = False
@@ -47,6 +47,7 @@ class Camera(CameraBase):
         try:
             while True:
                 raw_frame = self.picam2.capture_array()
+                raw_frame = self.fix_orientation(raw_frame)
                 if at_frame % 3 == 0:
                     processed_frame, floor_mask, badminton_mask, find_ball, error = self.process_frame(raw_frame)
                     yield find_ball, error            
@@ -66,6 +67,7 @@ class Camera(CameraBase):
     def single_test(self, filename="test_capture.jpg"):
         logger.info("capturing photo...")
         raw_frame = self.picam2.capture_array()
+        raw_frame = self.fix_orientation(raw_frame)
         processed_frame, floor_mask, badminton_mask, find_ball, error = self.process_frame(raw_frame)
         logger.info("find_ball=%s error=%s", find_ball, error)
         cv2.imwrite(f"/home/waryt/Desktop/{filename}", processed_frame)
