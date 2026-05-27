@@ -138,7 +138,8 @@ class CameraBase:
         candidate = []
         floor_mask = self.build_floor_mask(frame)
         badminton_mask = self.build_badminton_mask(frame)
-        contours, _ = cv2.findContours(badminton_mask,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+        detection_mask = self.build_display_mask(floor_mask, badminton_mask)
+        contours, _ = cv2.findContours(detection_mask,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
 
         for cnt in contours:
             self.contour_dealing(cnt, candidate, floor_mask)

@@ -49,6 +49,26 @@ def collect_rename_plan(stock_dir: Path) -> list[tuple[Path, Path]]:
     return rename_plan
 
 
+def collect_reorder_plan(stock_dir: Path) -> list[tuple[Path, Path]]:
+    images = sorted(
+        (path for path in stock_dir.iterdir() if is_image(path)),
+        key=lambda path: (
+            get_final_index(path) is None,
+            get_final_index(path) if get_final_index(path) is not None else path.stat().st_mtime,
+            path.name.lower(),
+        ),
+    )
+
+    reorder_plan = []
+
+    for index, image in enumerate(images):
+        target = image.with_name(f"image_{index}{image.suffix.lower()}")
+        if image.name != target.name:
+            reorder_plan.append((image, target))
+
+    return reorder_plan
+
+
 def apply_rename_plan(rename_plan: list[tuple[Path, Path]]) -> None:
     temp_plan = []
 
@@ -76,6 +96,11 @@ def main() -> None:
         action="store_true",
         help="Show what would be renamed without changing files.",
     )
+    parser.add_argument(
+        "--reorder",
+        action="store_true",
+        help="Reorder all photos to continuous image_i names starting from 0.",
+    )
     args = parser.parse_args()
 
     stock_dir = args.stock_dir.resolve()
@@ -84,7 +109,9 @@ def main() -> None:
     if not stock_dir.is_dir():
         raise NotADirectoryError(f"Stock path is not a folder: {stock_dir}")
 
-    rename_plan = collect_rename_plan(stock_dir)
+    rename_plan = (
+        collect_reorder_plan(stock_dir) if args.reorder else collect_rename_plan(stock_dir)
+    )
     if not rename_plan:
         print("No photos need renaming.")
         return

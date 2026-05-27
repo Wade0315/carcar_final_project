@@ -13,6 +13,8 @@ from camera_base import CameraBase
 
 lower_white = np.array([0, 180, 0])
 upper_white = np.array([180, 255, 40])
+lower_floor = np.array([35, 40, 20])
+upper_floor = np.array([95, 255, 180])
 
 WINDOW_NAME = "Boundary Tuner"
 TRACKBAR_WINDOW = "Boundary Controls"
@@ -46,6 +48,16 @@ def create_trackbars(color_space, lower, upper):
     cv2.createTrackbar(f"{channel_names[2]} max", TRACKBAR_WINDOW, int(upper[2]), 255, nothing)
 
 
+def create_prefixed_trackbars(prefix, color_space, lower, upper):
+    channel_names = CHANNEL_NAMES[color_space]
+    cv2.createTrackbar(f"{prefix} {channel_names[0]} min", TRACKBAR_WINDOW, int(lower[0]), 180, nothing)
+    cv2.createTrackbar(f"{prefix} {channel_names[0]} max", TRACKBAR_WINDOW, int(upper[0]), 180, nothing)
+    cv2.createTrackbar(f"{prefix} {channel_names[1]} min", TRACKBAR_WINDOW, int(lower[1]), 255, nothing)
+    cv2.createTrackbar(f"{prefix} {channel_names[1]} max", TRACKBAR_WINDOW, int(upper[1]), 255, nothing)
+    cv2.createTrackbar(f"{prefix} {channel_names[2]} min", TRACKBAR_WINDOW, int(lower[2]), 255, nothing)
+    cv2.createTrackbar(f"{prefix} {channel_names[2]} max", TRACKBAR_WINDOW, int(upper[2]), 255, nothing)
+
+
 def get_bounds(color_space):
     channel_names = CHANNEL_NAMES[color_space]
     lower = np.array([
@@ -61,9 +73,38 @@ def get_bounds(color_space):
     return lower, upper
 
 
+def get_prefixed_bounds(prefix, color_space):
+    channel_names = CHANNEL_NAMES[color_space]
+    lower = np.array([
+        cv2.getTrackbarPos(f"{prefix} {channel_names[0]} min", TRACKBAR_WINDOW),
+        cv2.getTrackbarPos(f"{prefix} {channel_names[1]} min", TRACKBAR_WINDOW),
+        cv2.getTrackbarPos(f"{prefix} {channel_names[2]} min", TRACKBAR_WINDOW),
+    ])
+    upper = np.array([
+        cv2.getTrackbarPos(f"{prefix} {channel_names[0]} max", TRACKBAR_WINDOW),
+        cv2.getTrackbarPos(f"{prefix} {channel_names[1]} max", TRACKBAR_WINDOW),
+        cv2.getTrackbarPos(f"{prefix} {channel_names[2]} max", TRACKBAR_WINDOW),
+    ])
+    return lower, upper
+
+
 def create_morph_trackbars(open_size=1, close_size=1):
     cv2.createTrackbar("open", TRACKBAR_WINDOW, int(open_size), 50, nothing)
     cv2.createTrackbar("close", TRACKBAR_WINDOW, int(close_size), 50, nothing)
+
+
+def create_detail_trackbars():
+    cv2.namedWindow(TRACKBAR_WINDOW)
+    cv2.moveWindow(TRACKBAR_WINDOW, *WINDOW_POSITIONS[TRACKBAR_WINDOW])
+    create_prefixed_trackbars("ball", "HLS", lower_white, upper_white)
+    create_prefixed_trackbars("floor", "HSV", lower_floor, upper_floor)
+    cv2.createTrackbar("ball open", TRACKBAR_WINDOW, 3, 50, nothing)
+    cv2.createTrackbar("ball close", TRACKBAR_WINDOW, 10, 50, nothing)
+    cv2.createTrackbar("floor open", TRACKBAR_WINDOW, 5, 50, nothing)
+    cv2.createTrackbar("floor close", TRACKBAR_WINDOW, 21, 50, nothing)
+    cv2.createTrackbar("min area %", TRACKBAR_WINDOW, 3, 100, nothing)
+    cv2.createTrackbar("bottom band %", TRACKBAR_WINDOW, 75, 100, nothing)
+    cv2.createTrackbar("margin", TRACKBAR_WINDOW, 0, 50, nothing)
 
 
 def get_morph_kernel(name):
@@ -95,6 +136,15 @@ def build_mask(image, color_space, lower, upper):
 def build_badminton_mask(image, color_space, lower, upper):
     mask = build_mask(image, color_space, lower, upper)
     return apply_morphology(mask)
+
+
+def build_badminton_mask_with_morph(image, color_space, lower, upper, open_size, close_size):
+    mask = build_mask(image, color_space, lower, upper)
+    if open_size > 0:
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((open_size, open_size), np.uint8))
+    if close_size > 0:
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((close_size, close_size), np.uint8))
+    return mask
 
 
 def build_floor_mask(image, lower, upper, open_size, close_size, min_area_ratio, bottom_band_ratio, margin):
@@ -130,38 +180,52 @@ def build_floor_mask(image, lower, upper, open_size, close_size, min_area_ratio,
 
     return raw_mask, filtered_mask
 
-
-def build_floor_views(image):
+def detect_badminton_like_camera(image, badminton_mask, floor_mask, min_area_ratio):
     height, width = image.shape[:2]
     detector = CameraBase(width=width, height=height, flip_code=None)
-    floor_mask = detector.build_floor_mask(image)
-    floor_result = cv2.bitwise_and(image, image, mask=floor_mask)
+    detector.min_floor_area = int(width * height * min_area_ratio)
+    floor_found = detector.has_floor(floor_mask)
+    display_mask = detector.build_display_mask(floor_mask, badminton_mask)
+    contours, _ = cv2.findContours(display_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    contours, _ = cv2.findContours(floor_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    cv2.drawContours(floor_result, contours, -1, (255, 0, 255), 3)
-    return floor_mask, floor_result
+    candidate = []
+    for cnt in contours:
+        detector.contour_dealing(cnt, candidate, floor_mask)
+
+    find_ball, _, target = detector.choose_ball(candidate)
+    return floor_found, find_ball, candidate, target, display_mask
 
 
-def draw_status(image, view_mode, color_space, lower, upper, help_text="v:view  m:color  p:print  q:quit"):
-    display = image.copy()
-    cv2.putText(
-        display,
+def draw_status(image, view_mode, color_space, lower, upper, help_text="v:view  m:color  p:print  q:quit", extra_text=None):
+    font_scale = 0.45
+    line_height = 22
+    status_lines = [
         f"{color_space} {view_mode}  lower={lower.tolist()} upper={upper.tolist()}",
-        (10, 25),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.6,
-        (0, 255, 255),
-        2,
-    )
-    cv2.putText(
-        display,
         help_text,
-        (10, 50),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.6,
-        (0, 255, 255),
-        2,
+    ]
+    if extra_text:
+        status_lines.append(extra_text)
+    status_height = line_height * len(status_lines) + 10
+    status_width = max(
+        cv2.getTextSize(line, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 1)[0][0]
+        for line in status_lines
     )
+    display_width = max(image.shape[1], status_width + 20)
+    image_x = (display_width - image.shape[1]) // 2
+    display = np.zeros((image.shape[0] + status_height, display_width, 3), dtype=np.uint8)
+    display[:image.shape[0], image_x:image_x + image.shape[1]] = image
+    status_y = image.shape[0] + 18
+
+    for index, line in enumerate(status_lines):
+        cv2.putText(
+            display,
+            line,
+            (10, status_y + line_height * index),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            font_scale,
+            (0, 255, 255),
+            1,
+        )
     return display
 
 
@@ -255,10 +319,7 @@ def tune_floor_mask_single_image(dir, image_file):
         return
 
     view_index = 0
-    lower = np.array([35, 40, 20])
-    upper = np.array([95, 255, 180])
-
-    create_trackbars("HSV", lower, upper)
+    create_trackbars("HSV", lower_floor, upper_floor)
     create_morph_trackbars(open_size=5, close_size=21)
     cv2.createTrackbar("min area %", TRACKBAR_WINDOW, 3, 100, nothing)
     cv2.createTrackbar("bottom band %", TRACKBAR_WINDOW, 75, 100, nothing)
@@ -320,40 +381,83 @@ def detail_single_alternation(dir, image_file):
         return
 
     view_index = 0
-    color_index = 0
-    bounds_by_space = {
-        "HLS": [lower_white.copy(), upper_white.copy()],
-        "HSV": [np.array([0, 0, 180]), np.array([180, 40, 255])],
-    }
-    create_trackbars(
-        COLOR_SPACES[color_index],
-        bounds_by_space[COLOR_SPACES[color_index]][0],
-        bounds_by_space[COLOR_SPACES[color_index]][1],
-    )
+    create_detail_trackbars()
     cv2.namedWindow(WINDOW_NAME)
     cv2.moveWindow(WINDOW_NAME, *WINDOW_POSITIONS[WINDOW_NAME])
 
     while True:
         view_mode = VIEW_MODES[view_index]
-        color_space = COLOR_SPACES[color_index]
-        lower, upper = get_bounds(color_space)
-        bounds_by_space[color_space] = [lower, upper]
-        mask = build_mask(image, color_space, lower, upper)
+        color_space = "HLS"
+        ball_lower, ball_upper = get_prefixed_bounds("ball", "HLS")
+        floor_lower, floor_upper = get_prefixed_bounds("floor", "HSV")
+        ball_open = cv2.getTrackbarPos("ball open", TRACKBAR_WINDOW)
+        ball_close = cv2.getTrackbarPos("ball close", TRACKBAR_WINDOW)
+        floor_open = cv2.getTrackbarPos("floor open", TRACKBAR_WINDOW)
+        floor_close = cv2.getTrackbarPos("floor close", TRACKBAR_WINDOW)
+        min_area_ratio = cv2.getTrackbarPos("min area %", TRACKBAR_WINDOW) / 100
+        bottom_band_ratio = cv2.getTrackbarPos("bottom band %", TRACKBAR_WINDOW) / 100
+        margin = cv2.getTrackbarPos("margin", TRACKBAR_WINDOW)
+        badminton_mask = build_badminton_mask_with_morph(
+            image,
+            color_space,
+            ball_lower,
+            ball_upper,
+            ball_open,
+            ball_close,
+        )
+        _, floor_mask = build_floor_mask(
+            image,
+            floor_lower,
+            floor_upper,
+            floor_open,
+            floor_close,
+            min_area_ratio,
+            bottom_band_ratio,
+            margin,
+        )
+        floor_result = cv2.bitwise_and(image, image, mask=floor_mask)
+        floor_contours, _ = cv2.findContours(floor_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cv2.drawContours(floor_result, floor_contours, -1, (255, 0, 255), 3)
+        floor_found, find_ball, candidate, target, display_mask = detect_badminton_like_camera(
+            image,
+            badminton_mask,
+            floor_mask,
+            min_area_ratio,
+        )
 
         if view_mode == "original":
-            display = image
+            display = image.copy()
         elif view_mode == "mask":
-            display = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+            display = cv2.cvtColor(display_mask, cv2.COLOR_GRAY2BGR)
         elif view_mode == "result":
-            display = cv2.bitwise_and(image, image, mask=mask)
+            display = cv2.bitwise_and(image, image, mask=display_mask)
         else:
-            floor_mask, floor_result = build_floor_views(image)
             if view_mode == "floor_mask":
                 display = cv2.cvtColor(floor_mask, cv2.COLOR_GRAY2BGR)
             else:
                 display = floor_result
 
-        display = draw_status(display, view_mode, color_space, lower, upper)
+        if view_mode in {"original", "result", "floor_result"}:
+            cv2.drawContours(display, floor_contours, -1, (255, 0, 255), 2)
+            for item in candidate:
+                cv2.drawContours(display, [item["contour"]], -1, (0, 255, 0), 2)
+            if find_ball and target is not None:
+                cv2.circle(display, (target["target_cx"], target["target_cy"]), 6, (0, 0, 255), -1)
+
+        extra_text = (
+            f"camera_like=True  floor_found={floor_found}  find_ball={find_ball}  "
+            f"candidate_count={len(candidate)}  ball_open={ball_open} ball_close={ball_close}  "
+            f"floor_open={floor_open} floor_close={floor_close}"
+        )
+        display = draw_status(
+            display,
+            view_mode,
+            color_space,
+            ball_lower,
+            ball_upper,
+            help_text="v:view  p:print  q:quit",
+            extra_text=extra_text,
+        )
         cv2.imshow(WINDOW_NAME, display)
 
         key = cv2.waitKey(30) & 0xFF
@@ -361,13 +465,18 @@ def detail_single_alternation(dir, image_file):
             break
         if key == ord("v"):
             view_index = (view_index + 1) % len(VIEW_MODES)
-        if key == ord("m"):
-            color_index = (color_index + 1) % len(COLOR_SPACES)
-            color_space = COLOR_SPACES[color_index]
-            cv2.destroyWindow(TRACKBAR_WINDOW)
-            create_trackbars(color_space, bounds_by_space[color_space][0], bounds_by_space[color_space][1])
         if key == ord("p"):
-            print_bounds(color_space, lower, upper)
+            print("lower_white = np.array({})".format(ball_lower.tolist()))
+            print("upper_white = np.array({})".format(ball_upper.tolist()))
+            print(f"kernel_open = np.ones(({ball_open}, {ball_open}), np.uint8)")
+            print(f"kernel_close = np.ones(({ball_close}, {ball_close}), np.uint8)")
+            print("lower_floor = np.array({})".format(floor_lower.tolist()))
+            print("upper_floor = np.array({})".format(floor_upper.tolist()))
+            print(f"floor_kernel_open = np.ones(({floor_open}, {floor_open}), np.uint8)")
+            print(f"floor_kernel_close = np.ones(({floor_close}, {floor_close}), np.uint8)")
+            print(f"min_floor_area_ratio = {min_area_ratio}")
+            print(f"floor_bottom_band_ratio = {bottom_band_ratio}")
+            print(f"floor_boundary_margin = {margin}")
 
     cv2.destroyAllWindows()
 
@@ -375,6 +484,7 @@ def detail_single_alternation(dir, image_file):
 
 
 if __name__ == "__main__":
-    #tune_floor_mask_single_image("stock", "test_image.jpg")
-    tune_badminton_mask_single_image("stock", "test_image.jpg")
-    #detail_single_alternation("stock", "test1.jpg")
+    i = 42
+    #tune_floor_mask_single_image("stock", f"image_{i}.jpg")
+    tune_badminton_mask_single_image("stock", f"image_{i}.jpg")
+    #detail_single_alternation("stock", f"image_{i}.jpg")
