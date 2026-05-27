@@ -69,19 +69,21 @@ class Arduino:
         if self.ser is None:
             logger.warning("serial not connected")
             return None
-
+        messages = []
         start = time.time()
 
         while time.time() - start < wait_time:
-            if self.ser.in_waiting > 0:
+            while self.ser.in_waiting > 0:
                 msg = self.ser.readline().decode(errors="ignore").strip()
-                logger.debug("received: %s", msg)
-                return msg
+                if msg:
+                    messages.append(msg)
+            time.sleep(0.005)
+            return messages
 
-            time.sleep(0.01)
-
-        return None
-
+    def print_all(self, messages):
+        for msg in messages:
+            logging.debug(msg)
+        
     def close(self):
         if self.ser is not None:
             self.ser.close()
@@ -106,6 +108,7 @@ if __name__ == "__main__":
     try:
         while True:
             msg = mega.receive()
+            mega.print_all(msg)
             if msg:
                 print(msg)
     except KeyboardInterrupt:
