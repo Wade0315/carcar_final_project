@@ -4,7 +4,6 @@ import time
 import logging
 import os
 from camera_base import CameraBase
-
 logger = logging.getLogger(__name__)
 
 
@@ -146,6 +145,35 @@ class Camera(CameraBase):
         cv2.imwrite(f"mask_{filename}", display_mask)
 
         logger.info("finish")
+
+    def capture_images(self, output_dir="/home/waryt/Desktop/image", interval=1.0, max_images=None):
+        os.makedirs(output_dir, exist_ok=True)
+        logger.info("capturing images to %s every %.1f second(s)", output_dir, interval)
+
+        count = 0
+        try:
+            while max_images is None or count < max_images:
+                start_time = time.monotonic()
+                ret, frame = self.cap.read()
+
+                if not ret:
+                    logger.warning("Failed to capture image")
+                    break
+
+                frame = cv2.resize(frame, (self.width, self.height))
+                frame = self.fix_orientation(frame)
+
+                timestamp = time.strftime("%Y%m%d_%H%M%S")
+                filename = os.path.join(output_dir, f"image_{timestamp}_{count:04d}.jpg")
+                cv2.imwrite(filename, frame)
+                logger.info("saved %s", filename)
+
+                count += 1
+                sleep_time = interval - (time.monotonic() - start_time)
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+        except KeyboardInterrupt:
+            logger.info("capture stopped by user")
 
     def close(self):
         if self.closed:

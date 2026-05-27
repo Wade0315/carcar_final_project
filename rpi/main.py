@@ -66,17 +66,16 @@ def main():
                         last_sent_state = state
                         logger.info("%s error=%s", state.name, error)
                     else:
+                        mega.send(state.value)
                         if last_sent_state != state:
-                            mega.send(state.value)
                             last_sent_state = state
                             logger.info("%s", state.name)
 
                 else:
                     found_count = 0
                     state = Status.NOT_FOUND
-
+                    mega.send(state.value)
                     if last_sent_state != state:
-                        mega.send(state.value)
                         last_sent_state = state
                         logger.info("%s", state.name)
     finally:
