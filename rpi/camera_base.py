@@ -12,18 +12,38 @@ class CameraBase:
         self.height = height
         self.flip_code = flip_code
 
-        self.lower_white = np.array([0, 180, 0])
-        self.upper_white = np.array([180, 255, 40])
+        self.lower_white = np.array([0, 166, 0])
+        self.upper_white = np.array([180, 255, 174])
         self.kernel_open = np.ones((3, 3), np.uint8)
         self.kernel_close = np.ones((10, 10), np.uint8)
 
-        self.lower_floor = np.array([35, 40, 20])
-        self.upper_floor = np.array([95, 255, 180])
+        self.lower_floor = np.array([35, 90, 20])
+        self.upper_floor = np.array([95, 255, 190])
         self.floor_kernel_open = np.ones((5, 5), np.uint8)
         self.floor_kernel_close = np.ones((21, 21), np.uint8)
         self.floor_boundary_margin = 0
         self.floor_bottom_band_ratio = 0.75
         self.min_floor_area = int(self.width * self.height * 0.03)
+
+        self.ring_v_max = 80
+        self.ring_kernel_open = np.ones((1, 1), np.uint8)
+        self.ring_kernel_close = np.ones((3, 3), np.uint8)
+        self.ring_floor_top_buffer = 35
+        self.ring_above_floor_top = 15
+        self.ring_below_floor_top = 55
+        self.ring_min_area = 20
+        self.ring_max_area = 1200
+        self.ring_max_size = 70
+        self.ring_white_roi_x = 70
+        self.ring_white_roi_up = 45
+        self.ring_white_roi_down = 35
+        self.ring_white_min_area = 120
+        self.ring_white_min_nonline_area = 100
+        self.ring_max_width = 50
+        self.ring_max_height = 50
+        self.ring_white_near_radius = 8
+        self.ring_floor_touch_x = 5
+        self.ring_floor_touch_down = 12
 
         self.target_x = None
         self.target_y = None
@@ -127,22 +147,209 @@ class CameraBase:
         badminton_mask = cv2.morphologyEx(badminton_mask, cv2.MORPH_CLOSE, self.kernel_close)
         return badminton_mask
 
+    def build_floor_top_search_mask(self, floor_mask):
+        if cv2.countNonZero(floor_mask) == 0:
+            return np.full((self.height, self.width), 255, dtype=np.uint8)
+
+        search_mask = np.zeros((self.height, self.width), dtype=np.uint8)
+        for x in range(self.width):
+            floor_y = np.flatnonzero(floor_mask[:, x])
+            if len(floor_y) == 0:
+                continue
+            top_y = max(int(floor_y[0]) - self.ring_floor_top_buffer, 0)
+            search_mask[top_y:, x] = 255
+        return search_mask
+
+    def build_black_ring_mask(self, frame, floor_mask):
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        ring_mask = cv2.inRange(
+            hsv,
+            np.array([0, 0, 0]),
+            np.array([180, 255, self.ring_v_max])
+        )
+        search_mask = self.build_floor_top_search_mask(floor_mask)
+        ring_mask = cv2.bitwise_and(ring_mask, ring_mask, mask=search_mask)
+        ring_mask = cv2.morphologyEx(ring_mask, cv2.MORPH_OPEN, self.ring_kernel_open)
+        ring_mask = cv2.morphologyEx(ring_mask, cv2.MORPH_CLOSE, self.ring_kernel_close)
+        return ring_mask
+
+    def is_near_floor_top(self, floor_mask, x, y):
+        if cv2.countNonZero(floor_mask) == 0:
+            return True
+        if not (0 <= x < self.width):
+            return False
+
+        floor_y = np.flatnonzero(floor_mask[:, x])
+        if len(floor_y) == 0:
+            return False
+
+        top_y = int(floor_y[0])
+        return top_y - self.ring_above_floor_top <= y <= top_y + self.ring_below_floor_top
+
+    def find_black_ring_candidates(self, ring_mask, floor_mask):
+        contours, _ = cv2.findContours(ring_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        rings = []
+
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            if not (self.ring_min_area <= area <= self.ring_max_area):
+                continue
+
+            x, y, w, h = cv2.boundingRect(cnt)
+            if w > self.ring_max_size or h > self.ring_max_size:
+                continue
+
+            rect = cv2.minAreaRect(cnt)
+            rw, rh = rect[1]
+            if rw == 0 or rh == 0:
+                continue
+
+            ratio = min(rw, rh) / max(rw, rh)
+            if ratio < 0.15:
+                continue
+
+            center_x = int(rect[0][0])
+            center_y = int(rect[0][1])
+            if not self.is_near_floor_top(floor_mask, center_x, center_y):
+                continue
+
+            rings.append({
+                "contour": cnt,
+                "rect": rect,
+                "area": area,
+                "bbox": (x, y, w, h),
+                "center_x": center_x,
+                "center_y": center_y,
+                "ratio": ratio,
+            })
+
+        rings.sort(key=lambda item: item["area"], reverse=True)
+        return rings
+
+    def crop_ring_white_roi(self, badminton_mask, ring):
+        cx = ring["center_x"]
+        cy = ring["center_y"]
+        x1 = max(cx - self.ring_white_roi_x, 0)
+        x2 = min(cx + self.ring_white_roi_x, self.width)
+        y1 = max(cy - self.ring_white_roi_up, 0)
+        y2 = min(cy + self.ring_white_roi_down, self.height)
+        return badminton_mask[y1:y2, x1:x2]
+
+    def horizontal_line_stats(self, mask):
+        white_area = cv2.countNonZero(mask)
+        if white_area == 0:
+            return 0, 0
+
+        kernel_width = max(mask.shape[1] // 3, 15)
+        horizontal_kernel = np.ones((1, kernel_width), np.uint8)
+        horizontal_lines = cv2.morphologyEx(mask, cv2.MORPH_OPEN, horizontal_kernel)
+        line_area = cv2.countNonZero(horizontal_lines)
+        return line_area / white_area, white_area - line_area
+
+    def ring_bottom_in_floor(self, ring, floor_mask):
+        if cv2.countNonZero(floor_mask) == 0:
+            return True
+
+        x, y, w, h = ring["bbox"]
+        bottom_x = x + w // 2
+        bottom_y = y + h - 1
+        if not (0 <= bottom_x < self.width and 0 <= bottom_y < self.height):
+            return False
+
+        x1 = max(bottom_x - self.ring_floor_touch_x, 0)
+        x2 = min(bottom_x + self.ring_floor_touch_x + 1, self.width)
+        y1 = bottom_y
+        y2 = min(bottom_y + self.ring_floor_touch_down + 1, self.height)
+        return cv2.countNonZero(floor_mask[y1:y2, x1:x2]) > 0
+
+    def validate_black_ring(self, ring, badminton_mask, floor_mask):
+        roi = self.crop_ring_white_roi(badminton_mask, ring)
+        white_area = cv2.countNonZero(roi)
+        _, nonline_area = self.horizontal_line_stats(roi)
+
+        x, y, w, h = ring["bbox"]
+        size_ok = w <= self.ring_max_width and h <= self.ring_max_height
+        near_kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (self.ring_white_near_radius * 2 + 1, self.ring_white_near_radius * 2 + 1)
+        )
+        near_white = cv2.dilate(badminton_mask, near_kernel)
+        touches_white = cv2.countNonZero(near_white[y:y + h, x:x + w]) > 0
+        bottom_in_floor = self.ring_bottom_in_floor(ring, floor_mask)
+
+        valid = (
+            size_ok
+            and bottom_in_floor
+            and touches_white
+            and white_area >= self.ring_white_min_area
+            and nonline_area >= self.ring_white_min_nonline_area
+        )
+
+        result = ring.copy()
+        result["white_area"] = white_area
+        result["white_nonline_area"] = nonline_area
+        result["size_ok"] = size_ok
+        result["touches_white"] = touches_white
+        result["bottom_in_floor"] = bottom_in_floor
+        result["valid"] = valid
+        return result
+
+    def validate_black_rings(self, rings, badminton_mask, floor_mask):
+        validated = [
+            self.validate_black_ring(ring, badminton_mask, floor_mask)
+            for ring in rings
+        ]
+        validated.sort(
+            key=lambda item: (
+                not item["valid"],
+                -item["white_area"],
+            )
+        )
+        return validated
+
+    def ring_to_candidate(self, ring):
+        target_cx = ring["center_x"]
+        target_cy = ring["center_y"]
+        error_from_center = target_cx - self.width // 2
+        return {
+            "contour": ring["contour"],
+            "rect": ring["rect"],
+            "area": ring["area"],
+            "rect_cx": target_cx,
+            "rect_cy": target_cy,
+            "target_cx": target_cx,
+            "target_cy": target_cy,
+            "error": error_from_center,
+            "w_h_ratio": ring["ratio"],
+            "head_found": True,
+            "source": "ring",
+            "white_area": ring["white_area"],
+            "white_nonline_area": ring["white_nonline_area"],
+        }
+
+    def detect_black_ring_candidates(self, frame, badminton_mask, floor_mask):
+        ring_mask = self.build_black_ring_mask(frame, floor_mask)
+        rings = self.find_black_ring_candidates(ring_mask, floor_mask)
+        validated = self.validate_black_rings(rings, badminton_mask, floor_mask)
+        return [self.ring_to_candidate(ring) for ring in validated if ring["valid"]]
+
     def build_display_mask(self, floor_mask, badminton_mask):
-            if not self.has_floor(floor_mask):
-                return badminton_mask
-            return cv2.bitwise_and(badminton_mask, badminton_mask, mask=floor_mask)
+        return badminton_mask
 
     def has_floor(self, floor_mask):
         return cv2.countNonZero(floor_mask) >= self.min_floor_area
+
     def detect_frame(self, frame):
-        candidate = []
         floor_mask = self.build_floor_mask(frame)
         badminton_mask = self.build_badminton_mask(frame)
-        detection_mask = self.build_display_mask(floor_mask, badminton_mask)
+
+        candidate = self.detect_black_ring_candidates(frame, badminton_mask, floor_mask)
+        detection_mask = badminton_mask
         contours, _ = cv2.findContours(detection_mask,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
 
-        for cnt in contours:
-            self.contour_dealing(cnt, candidate, floor_mask)
+        if not candidate:
+            for cnt in contours:
+                self.contour_dealing(cnt, candidate, None)
 
         find_ball, error, target = self.choose_ball(candidate)
         return floor_mask, badminton_mask, candidate, target, find_ball, error
@@ -168,7 +375,7 @@ class CameraBase:
         rect_cx, rect_cy = int(rect[0][0]), int(rect[0][1])
         if not (0 <= rect_cx < self.width and 0 <= rect_cy < self.height):
             return
-        if self.has_floor(floor_mask) and floor_mask[rect_cy, rect_cx] == 0:
+        if floor_mask is not None and self.has_floor(floor_mask) and floor_mask[rect_cy, rect_cx] == 0:
             return
 
         head = self.estimate_head_from_long_axis(cnt, rect)
