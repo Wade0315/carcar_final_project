@@ -42,9 +42,9 @@ RING_WHITE_ROI_X = 70
 RING_WHITE_ROI_UP = 45
 RING_WHITE_ROI_DOWN = 35
 RING_WHITE_MIN_AREA = 120
-RING_WHITE_MIN_NONLINE_AREA = 120
-RING_MAX_HEIGHT = 42
-RING_MAX_WIDTH = 45
+RING_WHITE_MIN_NONLINE_AREA = 100
+RING_MAX_HEIGHT = 50
+RING_MAX_WIDTH = 50
 RING_WHITE_NEAR_RADIUS = 8
 RING_FLOOR_TOUCH_X = 5
 RING_FLOOR_TOUCH_DOWN = 12
@@ -692,7 +692,7 @@ def detail_single_alternation(dir, image_file):
                 cv2.circle(display, (ring_target["center_x"], ring_target["center_y"]), 6, (0, 0, 255), -1)
 
         extra_text = (
-            f"ball_HSV={int(use_ball_hsv)}  ball_open={ball_open} ball_close={ball_close}  "
+            f"ball_open={ball_open} ball_close={ball_close}  "
             f"floor_open={floor_open} floor_close={floor_close}  "
             f"ring_V={ring_v_max} ring_ok={len(valid_rings)}/{len(validated_rings)} "
             f"nonline_min={ring_nonline_min}"
@@ -700,10 +700,10 @@ def detail_single_alternation(dir, image_file):
         display = draw_status(
             display,
             view_mode,
-            color_space,
+            f"{color_space} ball_HSV={int(use_ball_hsv)}",
             ball_lower,
             ball_upper,
-            help_text="v:view  p:print  q:quit",
+            help_text="v:view  p:print  d:debug  q:quit",
             extra_text=extra_text,
             show_bounds=False,
         )
@@ -737,6 +737,27 @@ def detail_single_alternation(dir, image_file):
             print(f"valid_ring_count = {len(valid_rings)}")
             if ring_target is not None:
                 print(f"ring_target = ({ring_target['center_x']}, {ring_target['center_y']})")
+        if key == ord("d"):
+            for index, ring in enumerate(validated_rings, start=1):
+                print(
+                    "ring_{}: valid={} bbox={} center=({}, {}) area={:.1f} ratio={:.2f} "
+                    "size_ok={} bottom_in_floor={} touches_white={} "
+                    "white_area={} nonline_area={} line_ratio={:.2f}".format(
+                        index,
+                        ring["valid"],
+                        ring["bbox"],
+                        ring["center_x"],
+                        ring["center_y"],
+                        ring["area"],
+                        ring["ratio"],
+                        ring["size_ok"],
+                        ring["bottom_in_floor"],
+                        ring["touches_white"],
+                        ring["white_area"],
+                        ring["white_nonline_area"],
+                        ring["white_line_ratio"],
+                    )
+                )
 
     cv2.destroyAllWindows()
 
@@ -744,7 +765,7 @@ def detail_single_alternation(dir, image_file):
 
 
 if __name__ == "__main__":
-    i = 52
+    i = 23
     #tune_floor_mask_single_image("stock", f"image_{i}.jpg")
     #tune_badminton_mask_single_image("stock", f"image_{i}.jpg")
     detail_single_alternation("stock", f"image_{i}.jpg")
