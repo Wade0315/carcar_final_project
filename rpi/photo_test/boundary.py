@@ -11,10 +11,10 @@ if str(RPI_DIR) not in sys.path:
 from camera_base import CameraBase
 
 
-lower_white = np.array([0, 180, 0])
-upper_white = np.array([180, 255, 40])
-lower_white_hsv = np.array([0, 0, 180])
-upper_white_hsv = np.array([180, 40, 255])
+lower_white_hls = np.array([0, 166, 0])
+upper_white_hls = np.array([180, 255, 174])
+lower_white_hsv = np.array([0, 0, 144])
+upper_white_hsv = np.array([180, 53, 255])
 lower_floor = np.array([35, 40, 20])
 upper_floor = np.array([95, 255, 180])
 
@@ -99,7 +99,7 @@ def create_detail_trackbars():
     cv2.namedWindow(TRACKBAR_WINDOW)
     cv2.moveWindow(TRACKBAR_WINDOW, *WINDOW_POSITIONS[TRACKBAR_WINDOW])
     cv2.createTrackbar("ball HSV", TRACKBAR_WINDOW, 0, 1, nothing)
-    create_prefixed_trackbars("ball HLS", "HLS", lower_white, upper_white)
+    create_prefixed_trackbars("ball HLS", "HLS", lower_white_hls, upper_white_hls)
     create_prefixed_trackbars("ball HSV", "HSV", lower_white_hsv, upper_white_hsv)
     create_prefixed_trackbars("floor", "HSV", lower_floor, upper_floor)
     cv2.createTrackbar("ball open", TRACKBAR_WINDOW, 3, 50, nothing)
@@ -276,7 +276,7 @@ def tune_badminton_mask_single_image(dir, image_file):
     view_index = 0
     color_index = 0
     bounds_by_space = {
-        "HLS": [lower_white.copy(), upper_white.copy()],
+        "HLS": [lower_white_hls.copy(), upper_white_hls.copy()],
         "HSV": [np.array([0, 0, 180]), np.array([180, 40, 255])],
     }
 
@@ -485,8 +485,8 @@ def detail_single_alternation(dir, image_file):
                 print("lower_white_hsv = np.array({})".format(ball_lower.tolist()))
                 print("upper_white_hsv = np.array({})".format(ball_upper.tolist()))
             else:
-                print("lower_white = np.array({})".format(ball_lower.tolist()))
-                print("upper_white = np.array({})".format(ball_upper.tolist()))
+                print("lower_white_hls = np.array({})".format(ball_lower.tolist()))
+                print("upper_white_hls = np.array({})".format(ball_upper.tolist()))
             print(f"kernel_open = np.ones(({ball_open}, {ball_open}), np.uint8)")
             print(f"kernel_close = np.ones(({ball_close}, {ball_close}), np.uint8)")
             print("lower_floor = np.array({})".format(floor_lower.tolist()))
