@@ -15,8 +15,8 @@ lower_white_hls = np.array([0, 166, 0])
 upper_white_hls = np.array([180, 255, 174])
 lower_white_hsv = np.array([0, 0, 144])
 upper_white_hsv = np.array([180, 53, 255])
-lower_floor = np.array([35, 40, 20])
-upper_floor = np.array([95, 255, 180])
+lower_floor = np.array([35, 90, 20])
+upper_floor = np.array([95, 255, 190])
 
 WINDOW_NAME = "Boundary Tuner"
 TRACKBAR_WINDOW = "Boundary Controls"
@@ -24,7 +24,7 @@ WINDOW_POSITIONS = {
     WINDOW_NAME: (800, 150),
     TRACKBAR_WINDOW: (300, 250),
 }
-VIEW_MODES = ["original", "mask", "result", "floor_mask", "floor_result"]
+VIEW_MODES = ["original", "mask", "result", "floor_mask", "floor_result", "ring_mask"]
 MASK_VIEW_MODES = ["original", "mask", "result"]
 FLOOR_VIEW_MODES = ["original", "floor_mask", "floor_result", "raw_mask"]
 COLOR_SPACES = ["HLS", "HSV"]
@@ -32,6 +32,22 @@ CHANNEL_NAMES = {
     "HLS": ["H", "L", "S"],
     "HSV": ["H", "S", "V"],
 }
+RING_FLOOR_TOP_BUFFER = 35
+RING_ABOVE_FLOOR_TOP = 15
+RING_BELOW_FLOOR_TOP = 55
+RING_MIN_AREA = 20
+RING_MAX_AREA = 1200
+RING_MAX_SIZE = 70
+RING_WHITE_ROI_X = 70
+RING_WHITE_ROI_UP = 45
+RING_WHITE_ROI_DOWN = 35
+RING_WHITE_MIN_AREA = 120
+RING_WHITE_MIN_NONLINE_AREA = 120
+RING_MAX_HEIGHT = 42
+RING_MAX_WIDTH = 45
+RING_WHITE_NEAR_RADIUS = 8
+RING_FLOOR_TOUCH_X = 5
+RING_FLOOR_TOUCH_DOWN = 12
 
 
 def nothing(_):
@@ -106,6 +122,11 @@ def create_detail_trackbars():
     cv2.createTrackbar("ball close", TRACKBAR_WINDOW, 10, 50, nothing)
     cv2.createTrackbar("floor open", TRACKBAR_WINDOW, 5, 50, nothing)
     cv2.createTrackbar("floor close", TRACKBAR_WINDOW, 21, 50, nothing)
+    cv2.createTrackbar("ring V max", TRACKBAR_WINDOW, 80, 255, nothing)
+    cv2.createTrackbar("ring open", TRACKBAR_WINDOW, 1, 20, nothing)
+    cv2.createTrackbar("ring close", TRACKBAR_WINDOW, 3, 20, nothing)
+    cv2.createTrackbar("ring white min", TRACKBAR_WINDOW, RING_WHITE_MIN_AREA, 1000, nothing)
+    cv2.createTrackbar("ring nonline min", TRACKBAR_WINDOW, RING_WHITE_MIN_NONLINE_AREA, 1000, nothing)
 
 
 def get_morph_kernel(name):
@@ -148,6 +169,181 @@ def build_badminton_mask_with_morph(image, color_space, lower, upper, open_size,
     return mask
 
 
+def build_floor_top_search_mask(floor_mask, top_buffer=RING_FLOOR_TOP_BUFFER):
+    height, width = floor_mask.shape[:2]
+    if cv2.countNonZero(floor_mask) == 0:
+        return np.full((height, width), 255, dtype=np.uint8)
+
+    search_mask = np.zeros((height, width), dtype=np.uint8)
+    for x in range(width):
+        floor_y = np.flatnonzero(floor_mask[:, x])
+        if len(floor_y) == 0:
+            continue
+        top_y = max(int(floor_y[0]) - top_buffer, 0)
+        search_mask[top_y:, x] = 255
+    return search_mask
+
+
+def build_black_ring_mask(image, floor_mask, v_max, open_size, close_size):
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    ring_mask = cv2.inRange(hsv, np.array([0, 0, 0]), np.array([180, 255, v_max]))
+    search_mask = build_floor_top_search_mask(floor_mask)
+    ring_mask = cv2.bitwise_and(ring_mask, ring_mask, mask=search_mask)
+
+    if open_size > 0:
+        ring_mask = cv2.morphologyEx(ring_mask, cv2.MORPH_OPEN, np.ones((open_size, open_size), np.uint8))
+    if close_size > 0:
+        ring_mask = cv2.morphologyEx(ring_mask, cv2.MORPH_CLOSE, np.ones((close_size, close_size), np.uint8))
+    return ring_mask
+
+
+def is_near_floor_top(floor_mask, x, y, above=RING_ABOVE_FLOOR_TOP, below=RING_BELOW_FLOOR_TOP):
+    if floor_mask is None or cv2.countNonZero(floor_mask) == 0:
+        return True
+    if not (0 <= x < floor_mask.shape[1]):
+        return False
+
+    floor_y = np.flatnonzero(floor_mask[:, x])
+    if len(floor_y) == 0:
+        return False
+
+    top_y = int(floor_y[0])
+    return top_y - above <= y <= top_y + below
+
+
+def find_black_ring_candidates(ring_mask, floor_mask=None):
+    contours, _ = cv2.findContours(ring_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    candidates = []
+
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if not (RING_MIN_AREA <= area <= RING_MAX_AREA):
+            continue
+
+        x, y, w, h = cv2.boundingRect(cnt)
+        if w > RING_MAX_SIZE or h > RING_MAX_SIZE:
+            continue
+
+        rect = cv2.minAreaRect(cnt)
+        rw, rh = rect[1]
+        if rw == 0 or rh == 0:
+            continue
+
+        ratio = min(rw, rh) / max(rw, rh)
+        if ratio < 0.15:
+            continue
+
+        center_x = int(rect[0][0])
+        center_y = int(rect[0][1])
+        if not is_near_floor_top(floor_mask, center_x, center_y):
+            continue
+
+        candidates.append({
+            "contour": cnt,
+            "area": area,
+            "bbox": (x, y, w, h),
+            "center_x": center_x,
+            "center_y": center_y,
+            "ratio": ratio,
+        })
+
+    candidates.sort(key=lambda item: item["area"], reverse=True)
+    return candidates
+
+
+def crop_ring_white_roi(mask, ring):
+    height, width = mask.shape[:2]
+    cx = ring["center_x"]
+    cy = ring["center_y"]
+    x1 = max(cx - RING_WHITE_ROI_X, 0)
+    x2 = min(cx + RING_WHITE_ROI_X, width)
+    y1 = max(cy - RING_WHITE_ROI_UP, 0)
+    y2 = min(cy + RING_WHITE_ROI_DOWN, height)
+    return mask[y1:y2, x1:x2], (x1, y1, x2, y2)
+
+
+def horizontal_line_stats(mask):
+    white_area = cv2.countNonZero(mask)
+    if white_area == 0:
+        return 0, 0
+
+    kernel_width = max(mask.shape[1] // 3, 15)
+    horizontal_kernel = np.ones((1, kernel_width), np.uint8)
+    horizontal_lines = cv2.morphologyEx(mask, cv2.MORPH_OPEN, horizontal_kernel)
+    line_area = cv2.countNonZero(horizontal_lines)
+    return line_area / white_area, white_area - line_area
+
+
+def ring_bottom_in_floor(ring, floor_mask):
+    if floor_mask is None or cv2.countNonZero(floor_mask) == 0:
+        return True
+
+    x, y, w, h = ring["bbox"]
+    bottom_x = x + w // 2
+    bottom_y = y + h - 1
+
+    height, width = floor_mask.shape[:2]
+    if not (0 <= bottom_x < width and 0 <= bottom_y < height):
+        return False
+
+    x1 = max(bottom_x - RING_FLOOR_TOUCH_X, 0)
+    x2 = min(bottom_x + RING_FLOOR_TOUCH_X + 1, width)
+    y1 = bottom_y
+    y2 = min(bottom_y + RING_FLOOR_TOUCH_DOWN + 1, height)
+    floor_patch = floor_mask[y1:y2, x1:x2]
+    return cv2.countNonZero(floor_patch) > 0
+
+
+def validate_ring_with_white_mask(ring, badminton_mask, floor_mask, min_white_area, min_nonline_area):
+    roi, roi_box = crop_ring_white_roi(badminton_mask, ring)
+    white_area = cv2.countNonZero(roi)
+    line_ratio, nonline_area = horizontal_line_stats(roi)
+    x, y, w, h = ring["bbox"]
+    size_ok = w <= RING_MAX_WIDTH and h <= RING_MAX_HEIGHT
+
+    near_kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE,
+        (RING_WHITE_NEAR_RADIUS * 2 + 1, RING_WHITE_NEAR_RADIUS * 2 + 1),
+    )
+    near_white = cv2.dilate(badminton_mask, near_kernel)
+    touches_white = cv2.countNonZero(near_white[y:y + h, x:x + w]) > 0
+    bottom_in_floor = ring_bottom_in_floor(ring, floor_mask)
+
+    valid = (
+        size_ok
+        and bottom_in_floor
+        and touches_white
+        and white_area >= min_white_area
+        and nonline_area >= min_nonline_area
+    )
+
+    result = ring.copy()
+    result["white_area"] = white_area
+    result["white_line_ratio"] = line_ratio
+    result["white_nonline_area"] = nonline_area
+    result["white_roi"] = roi_box
+    result["size_ok"] = size_ok
+    result["bottom_in_floor"] = bottom_in_floor
+    result["touches_white"] = touches_white
+    result["valid"] = valid
+    return result
+
+
+def validate_ring_candidates_with_white(ring_candidates, badminton_mask, floor_mask, min_white_area, min_nonline_area):
+    validated = [
+        validate_ring_with_white_mask(ring, badminton_mask, floor_mask, min_white_area, min_nonline_area)
+        for ring in ring_candidates
+    ]
+    validated.sort(
+        key=lambda item: (
+            not item["valid"],
+            -item["white_area"],
+            item["white_line_ratio"],
+        )
+    )
+    return validated
+
+
 def build_floor_mask(image, lower, upper, open_size, close_size, min_area_ratio, bottom_band_ratio, margin):
     height, width = image.shape[:2]
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
@@ -181,17 +377,22 @@ def build_floor_mask(image, lower, upper, open_size, close_size, min_area_ratio,
 
     return raw_mask, filtered_mask
 
-def detect_badminton_like_camera(image, badminton_mask, floor_mask, min_area_ratio):
+def detect_badminton_like_camera(image, badminton_mask, floor_mask, min_area_ratio, use_floor_mask=True):
     height, width = image.shape[:2]
     detector = CameraBase(width=width, height=height, flip_code=None)
     detector.min_floor_area = int(width * height * min_area_ratio)
     floor_found = detector.has_floor(floor_mask)
-    display_mask = detector.build_display_mask(floor_mask, badminton_mask)
+    if use_floor_mask:
+        display_mask = detector.build_display_mask(floor_mask, badminton_mask)
+        position_mask = floor_mask
+    else:
+        display_mask = badminton_mask
+        position_mask = np.zeros((height, width), dtype=np.uint8)
     contours, _ = cv2.findContours(display_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     candidate = []
     for cnt in contours:
-        detector.contour_dealing(cnt, candidate, floor_mask)
+        detector.contour_dealing(cnt, candidate, position_mask)
 
     find_ball, _, target = detector.choose_ball(candidate)
     return floor_found, find_ball, candidate, target, display_mask
@@ -408,6 +609,11 @@ def detail_single_alternation(dir, image_file):
         ball_close = cv2.getTrackbarPos("ball close", TRACKBAR_WINDOW)
         floor_open = cv2.getTrackbarPos("floor open", TRACKBAR_WINDOW)
         floor_close = cv2.getTrackbarPos("floor close", TRACKBAR_WINDOW)
+        ring_v_max = cv2.getTrackbarPos("ring V max", TRACKBAR_WINDOW)
+        ring_open = cv2.getTrackbarPos("ring open", TRACKBAR_WINDOW)
+        ring_close = cv2.getTrackbarPos("ring close", TRACKBAR_WINDOW)
+        ring_white_min = cv2.getTrackbarPos("ring white min", TRACKBAR_WINDOW)
+        ring_nonline_min = cv2.getTrackbarPos("ring nonline min", TRACKBAR_WINDOW)
         min_area_ratio = 0.03
         bottom_band_ratio = 0.75
         margin = 0
@@ -429,6 +635,23 @@ def detail_single_alternation(dir, image_file):
             bottom_band_ratio,
             margin,
         )
+        ring_mask = build_black_ring_mask(
+            image,
+            floor_mask,
+            ring_v_max,
+            ring_open,
+            ring_close,
+        )
+        ring_candidates = find_black_ring_candidates(ring_mask, floor_mask)
+        validated_rings = validate_ring_candidates_with_white(
+            ring_candidates,
+            badminton_mask,
+            floor_mask,
+            ring_white_min,
+            ring_nonline_min,
+        )
+        valid_rings = [ring for ring in validated_rings if ring["valid"]]
+        ring_target = valid_rings[0] if valid_rings else None
         floor_result = cv2.bitwise_and(image, image, mask=floor_mask)
         floor_contours, _ = cv2.findContours(floor_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         cv2.drawContours(floor_result, floor_contours, -1, (255, 0, 255), 1)
@@ -437,6 +660,7 @@ def detail_single_alternation(dir, image_file):
             badminton_mask,
             floor_mask,
             min_area_ratio,
+            use_floor_mask=False,
         )
 
         if view_mode == "original":
@@ -448,19 +672,30 @@ def detail_single_alternation(dir, image_file):
         else:
             if view_mode == "floor_mask":
                 display = cv2.cvtColor(floor_mask, cv2.COLOR_GRAY2BGR)
+            elif view_mode == "ring_mask":
+                display = cv2.cvtColor(ring_mask, cv2.COLOR_GRAY2BGR)
             else:
                 display = floor_result
 
-        if view_mode in {"original", "result", "floor_result"}:
+        if view_mode in {"original", "result", "floor_result", "ring_mask"}:
             cv2.drawContours(display, floor_contours, -1, (255, 0, 255), 1)
+            for ring in validated_rings:
+                x, y, w, h = ring["bbox"]
+                color = (0, 255, 0) if ring["valid"] else (255, 0, 0)
+                cv2.rectangle(display, (x, y), (x + w, y + h), color, 2)
+                cv2.circle(display, (ring["center_x"], ring["center_y"]), 3, (255, 255, 0), -1)
+                rx1, ry1, rx2, ry2 = ring["white_roi"]
+                cv2.rectangle(display, (rx1, ry1), (rx2, ry2), color, 1)
             for item in candidate:
                 cv2.drawContours(display, [item["contour"]], -1, (0, 255, 0), 2)
-            if find_ball and target is not None:
-                cv2.circle(display, (target["target_cx"], target["target_cy"]), 6, (0, 0, 255), -1)
+            if ring_target is not None:
+                cv2.circle(display, (ring_target["center_x"], ring_target["center_y"]), 6, (0, 0, 255), -1)
 
         extra_text = (
             f"ball_HSV={int(use_ball_hsv)}  ball_open={ball_open} ball_close={ball_close}  "
-            f"floor_open={floor_open} floor_close={floor_close}"
+            f"floor_open={floor_open} floor_close={floor_close}  "
+            f"ring_V={ring_v_max} ring_ok={len(valid_rings)}/{len(validated_rings)} "
+            f"nonline_min={ring_nonline_min}"
         )
         display = draw_status(
             display,
@@ -493,6 +728,15 @@ def detail_single_alternation(dir, image_file):
             print("upper_floor = np.array({})".format(floor_upper.tolist()))
             print(f"floor_kernel_open = np.ones(({floor_open}, {floor_open}), np.uint8)")
             print(f"floor_kernel_close = np.ones(({floor_close}, {floor_close}), np.uint8)")
+            print(f"ring_v_max = {ring_v_max}")
+            print(f"ring_open = {ring_open}")
+            print(f"ring_close = {ring_close}")
+            print(f"ring_white_min = {ring_white_min}")
+            print(f"ring_nonline_min = {ring_nonline_min}")
+            print(f"ring_count = {len(validated_rings)}")
+            print(f"valid_ring_count = {len(valid_rings)}")
+            if ring_target is not None:
+                print(f"ring_target = ({ring_target['center_x']}, {ring_target['center_y']})")
 
     cv2.destroyAllWindows()
 
@@ -500,7 +744,7 @@ def detail_single_alternation(dir, image_file):
 
 
 if __name__ == "__main__":
-    i = 0
+    i = 52
     #tune_floor_mask_single_image("stock", f"image_{i}.jpg")
     #tune_badminton_mask_single_image("stock", f"image_{i}.jpg")
     detail_single_alternation("stock", f"image_{i}.jpg")
