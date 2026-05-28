@@ -21,8 +21,8 @@ upper_floor = np.array([95, 255, 190])
 WINDOW_NAME = "Boundary Tuner"
 TRACKBAR_WINDOW = "Boundary Controls"
 WINDOW_POSITIONS = {
-    WINDOW_NAME: (800, 150),
-    TRACKBAR_WINDOW: (300, 250),
+    WINDOW_NAME: (650, 150),
+    TRACKBAR_WINDOW: (200, 50),
 }
 VIEW_MODES = ["original", "mask", "result", "floor_mask", "floor_result", "ring_mask"]
 MASK_VIEW_MODES = ["original", "mask", "result"]
