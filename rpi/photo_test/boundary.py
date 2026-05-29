@@ -24,6 +24,8 @@ WINDOW_POSITIONS = {
     WINDOW_NAME: (650, 150),
     TRACKBAR_WINDOW: (200, 50),
 }
+TRACKBAR_WINDOW_SIZE = (360, 360)
+DETAIL_TRACKBAR_WINDOW_SIZE = (360, 760)
 VIEW_MODES = ["original", "mask", "result", "floor_mask", "floor_result", "ring_mask"]
 MASK_VIEW_MODES = ["original", "mask", "result"]
 FLOOR_VIEW_MODES = ["original", "floor_mask", "floor_result", "raw_mask"]
@@ -31,6 +33,11 @@ COLOR_SPACES = ["HLS", "HSV"]
 CHANNEL_NAMES = {
     "HLS": ["H", "L", "S"],
     "HSV": ["H", "S", "V"],
+}
+TRACKBAR_PREFIXES = {
+    "ball HLS": "bL",
+    "ball HSV": "bV",
+    "floor": "f",
 }
 RING_FLOOR_TOP_BUFFER = 35
 RING_ABOVE_FLOOR_TOP = 15
@@ -42,7 +49,7 @@ RING_WHITE_ROI_X = 70
 RING_WHITE_ROI_UP = 45
 RING_WHITE_ROI_DOWN = 35
 RING_WHITE_MIN_AREA = 120
-RING_WHITE_MIN_NONLINE_AREA = 100
+RING_WHITE_MIN_NONLINE_AREA = 33
 RING_MAX_HEIGHT = 50
 RING_MAX_WIDTH = 50
 RING_WHITE_NEAR_RADIUS = 8
@@ -54,54 +61,67 @@ def nothing(_):
     pass
 
 
+def setup_trackbar_window(window_name=TRACKBAR_WINDOW, size=TRACKBAR_WINDOW_SIZE):
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(window_name, *size)
+    cv2.moveWindow(window_name, *WINDOW_POSITIONS[window_name])
+
+
+def channel_trackbar_name(channel_name, is_lower, prefix=None):
+    short_prefix = TRACKBAR_PREFIXES.get(prefix, prefix)
+    suffix = "-" if is_lower else "+"
+    if short_prefix:
+        return f"{short_prefix} {channel_name}{suffix}"
+    return f"{channel_name}{suffix}"
+
+
 def create_trackbars(color_space, lower, upper):
     channel_names = CHANNEL_NAMES[color_space]
-    cv2.namedWindow(TRACKBAR_WINDOW)
-    cv2.moveWindow(TRACKBAR_WINDOW, *WINDOW_POSITIONS[TRACKBAR_WINDOW])
-    cv2.createTrackbar(f"{channel_names[0]} min", TRACKBAR_WINDOW, int(lower[0]), 180, nothing)
-    cv2.createTrackbar(f"{channel_names[0]} max", TRACKBAR_WINDOW, int(upper[0]), 180, nothing)
-    cv2.createTrackbar(f"{channel_names[1]} min", TRACKBAR_WINDOW, int(lower[1]), 255, nothing)
-    cv2.createTrackbar(f"{channel_names[1]} max", TRACKBAR_WINDOW, int(upper[1]), 255, nothing)
-    cv2.createTrackbar(f"{channel_names[2]} min", TRACKBAR_WINDOW, int(lower[2]), 255, nothing)
-    cv2.createTrackbar(f"{channel_names[2]} max", TRACKBAR_WINDOW, int(upper[2]), 255, nothing)
+    setup_trackbar_window()
+    cv2.createTrackbar(channel_trackbar_name(channel_names[0], True), TRACKBAR_WINDOW, int(lower[0]), 180, nothing)
+    cv2.createTrackbar(channel_trackbar_name(channel_names[0], False), TRACKBAR_WINDOW, int(upper[0]), 180, nothing)
+    cv2.createTrackbar(channel_trackbar_name(channel_names[1], True), TRACKBAR_WINDOW, int(lower[1]), 255, nothing)
+    cv2.createTrackbar(channel_trackbar_name(channel_names[1], False), TRACKBAR_WINDOW, int(upper[1]), 255, nothing)
+    cv2.createTrackbar(channel_trackbar_name(channel_names[2], True), TRACKBAR_WINDOW, int(lower[2]), 255, nothing)
+    cv2.createTrackbar(channel_trackbar_name(channel_names[2], False), TRACKBAR_WINDOW, int(upper[2]), 255, nothing)
 
 
-def create_prefixed_trackbars(prefix, color_space, lower, upper):
+def create_prefixed_trackbars(prefix, color_space, lower, upper, window_name=TRACKBAR_WINDOW):
     channel_names = CHANNEL_NAMES[color_space]
-    cv2.createTrackbar(f"{prefix} {channel_names[0]} min", TRACKBAR_WINDOW, int(lower[0]), 180, nothing)
-    cv2.createTrackbar(f"{prefix} {channel_names[0]} max", TRACKBAR_WINDOW, int(upper[0]), 180, nothing)
-    cv2.createTrackbar(f"{prefix} {channel_names[1]} min", TRACKBAR_WINDOW, int(lower[1]), 255, nothing)
-    cv2.createTrackbar(f"{prefix} {channel_names[1]} max", TRACKBAR_WINDOW, int(upper[1]), 255, nothing)
-    cv2.createTrackbar(f"{prefix} {channel_names[2]} min", TRACKBAR_WINDOW, int(lower[2]), 255, nothing)
-    cv2.createTrackbar(f"{prefix} {channel_names[2]} max", TRACKBAR_WINDOW, int(upper[2]), 255, nothing)
+    cv2.createTrackbar(channel_trackbar_name(channel_names[0], True, prefix), window_name, int(lower[0]), 180, nothing)
+    cv2.createTrackbar(channel_trackbar_name(channel_names[0], False, prefix), window_name, int(upper[0]), 180, nothing)
+    cv2.createTrackbar(channel_trackbar_name(channel_names[1], True, prefix), window_name, int(lower[1]), 255, nothing)
+    cv2.createTrackbar(channel_trackbar_name(channel_names[1], False, prefix), window_name, int(upper[1]), 255, nothing)
+    cv2.createTrackbar(channel_trackbar_name(channel_names[2], True, prefix), window_name, int(lower[2]), 255, nothing)
+    cv2.createTrackbar(channel_trackbar_name(channel_names[2], False, prefix), window_name, int(upper[2]), 255, nothing)
 
 
 def get_bounds(color_space):
     channel_names = CHANNEL_NAMES[color_space]
     lower = np.array([
-        cv2.getTrackbarPos(f"{channel_names[0]} min", TRACKBAR_WINDOW),
-        cv2.getTrackbarPos(f"{channel_names[1]} min", TRACKBAR_WINDOW),
-        cv2.getTrackbarPos(f"{channel_names[2]} min", TRACKBAR_WINDOW),
+        cv2.getTrackbarPos(channel_trackbar_name(channel_names[0], True), TRACKBAR_WINDOW),
+        cv2.getTrackbarPos(channel_trackbar_name(channel_names[1], True), TRACKBAR_WINDOW),
+        cv2.getTrackbarPos(channel_trackbar_name(channel_names[2], True), TRACKBAR_WINDOW),
     ])
     upper = np.array([
-        cv2.getTrackbarPos(f"{channel_names[0]} max", TRACKBAR_WINDOW),
-        cv2.getTrackbarPos(f"{channel_names[1]} max", TRACKBAR_WINDOW),
-        cv2.getTrackbarPos(f"{channel_names[2]} max", TRACKBAR_WINDOW),
+        cv2.getTrackbarPos(channel_trackbar_name(channel_names[0], False), TRACKBAR_WINDOW),
+        cv2.getTrackbarPos(channel_trackbar_name(channel_names[1], False), TRACKBAR_WINDOW),
+        cv2.getTrackbarPos(channel_trackbar_name(channel_names[2], False), TRACKBAR_WINDOW),
     ])
     return lower, upper
 
 
-def get_prefixed_bounds(prefix, color_space):
+def get_prefixed_bounds(prefix, color_space, window_name=TRACKBAR_WINDOW):
     channel_names = CHANNEL_NAMES[color_space]
     lower = np.array([
-        cv2.getTrackbarPos(f"{prefix} {channel_names[0]} min", TRACKBAR_WINDOW),
-        cv2.getTrackbarPos(f"{prefix} {channel_names[1]} min", TRACKBAR_WINDOW),
-        cv2.getTrackbarPos(f"{prefix} {channel_names[2]} min", TRACKBAR_WINDOW),
+        cv2.getTrackbarPos(channel_trackbar_name(channel_names[0], True, prefix), window_name),
+        cv2.getTrackbarPos(channel_trackbar_name(channel_names[1], True, prefix), window_name),
+        cv2.getTrackbarPos(channel_trackbar_name(channel_names[2], True, prefix), window_name),
     ])
     upper = np.array([
-        cv2.getTrackbarPos(f"{prefix} {channel_names[0]} max", TRACKBAR_WINDOW),
-        cv2.getTrackbarPos(f"{prefix} {channel_names[1]} max", TRACKBAR_WINDOW),
-        cv2.getTrackbarPos(f"{prefix} {channel_names[2]} max", TRACKBAR_WINDOW),
+        cv2.getTrackbarPos(channel_trackbar_name(channel_names[0], False, prefix), window_name),
+        cv2.getTrackbarPos(channel_trackbar_name(channel_names[1], False, prefix), window_name),
+        cv2.getTrackbarPos(channel_trackbar_name(channel_names[2], False, prefix), window_name),
     ])
     return lower, upper
 
@@ -112,21 +132,15 @@ def create_morph_trackbars(open_size=1, close_size=1):
 
 
 def create_detail_trackbars():
-    cv2.namedWindow(TRACKBAR_WINDOW)
-    cv2.moveWindow(TRACKBAR_WINDOW, *WINDOW_POSITIONS[TRACKBAR_WINDOW])
-    cv2.createTrackbar("ball HSV", TRACKBAR_WINDOW, 0, 1, nothing)
+    setup_trackbar_window(TRACKBAR_WINDOW, DETAIL_TRACKBAR_WINDOW_SIZE)
     create_prefixed_trackbars("ball HLS", "HLS", lower_white_hls, upper_white_hls)
-    create_prefixed_trackbars("ball HSV", "HSV", lower_white_hsv, upper_white_hsv)
     create_prefixed_trackbars("floor", "HSV", lower_floor, upper_floor)
-    cv2.createTrackbar("ball open", TRACKBAR_WINDOW, 3, 50, nothing)
-    cv2.createTrackbar("ball close", TRACKBAR_WINDOW, 10, 50, nothing)
-    cv2.createTrackbar("floor open", TRACKBAR_WINDOW, 5, 50, nothing)
-    cv2.createTrackbar("floor close", TRACKBAR_WINDOW, 21, 50, nothing)
-    cv2.createTrackbar("ring V max", TRACKBAR_WINDOW, 80, 255, nothing)
-    cv2.createTrackbar("ring open", TRACKBAR_WINDOW, 1, 20, nothing)
-    cv2.createTrackbar("ring close", TRACKBAR_WINDOW, 3, 20, nothing)
-    cv2.createTrackbar("ring white min", TRACKBAR_WINDOW, RING_WHITE_MIN_AREA, 1000, nothing)
-    cv2.createTrackbar("ring nonline min", TRACKBAR_WINDOW, RING_WHITE_MIN_NONLINE_AREA, 1000, nothing)
+    cv2.createTrackbar("bo", TRACKBAR_WINDOW, 3, 50, nothing)
+    cv2.createTrackbar("bc", TRACKBAR_WINDOW, 10, 50, nothing)
+    cv2.createTrackbar("fo", TRACKBAR_WINDOW, 5, 50, nothing)
+    cv2.createTrackbar("fc", TRACKBAR_WINDOW, 21, 50, nothing)
+    cv2.createTrackbar("rV", TRACKBAR_WINDOW, 80, 255, nothing)
+    cv2.createTrackbar("rn", TRACKBAR_WINDOW, RING_WHITE_MIN_NONLINE_AREA, 1000, nothing)
 
 
 def get_morph_kernel(name):
@@ -601,19 +615,19 @@ def detail_single_alternation(dir, image_file):
 
     while True:
         view_mode = VIEW_MODES[view_index]
-        use_ball_hsv = cv2.getTrackbarPos("ball HSV", TRACKBAR_WINDOW) == 1
+        use_ball_hsv = cv2.getTrackbarPos("bHSV", TRACKBAR_WINDOW) == 1
         color_space = "HSV" if use_ball_hsv else "HLS"
         ball_lower, ball_upper = get_prefixed_bounds(f"ball {color_space}", color_space)
         floor_lower, floor_upper = get_prefixed_bounds("floor", "HSV")
-        ball_open = cv2.getTrackbarPos("ball open", TRACKBAR_WINDOW)
-        ball_close = cv2.getTrackbarPos("ball close", TRACKBAR_WINDOW)
-        floor_open = cv2.getTrackbarPos("floor open", TRACKBAR_WINDOW)
-        floor_close = cv2.getTrackbarPos("floor close", TRACKBAR_WINDOW)
-        ring_v_max = cv2.getTrackbarPos("ring V max", TRACKBAR_WINDOW)
-        ring_open = cv2.getTrackbarPos("ring open", TRACKBAR_WINDOW)
-        ring_close = cv2.getTrackbarPos("ring close", TRACKBAR_WINDOW)
-        ring_white_min = cv2.getTrackbarPos("ring white min", TRACKBAR_WINDOW)
-        ring_nonline_min = cv2.getTrackbarPos("ring nonline min", TRACKBAR_WINDOW)
+        ball_open = cv2.getTrackbarPos("bo", TRACKBAR_WINDOW)
+        ball_close = cv2.getTrackbarPos("bc", TRACKBAR_WINDOW)
+        floor_open = cv2.getTrackbarPos("fo", TRACKBAR_WINDOW)
+        floor_close = cv2.getTrackbarPos("fc", TRACKBAR_WINDOW)
+        ring_v_max = cv2.getTrackbarPos("rV", TRACKBAR_WINDOW)
+        ring_open = cv2.getTrackbarPos("ro", TRACKBAR_WINDOW)
+        ring_close = cv2.getTrackbarPos("rc", TRACKBAR_WINDOW)
+        ring_white_min = cv2.getTrackbarPos("rw", TRACKBAR_WINDOW)
+        ring_nonline_min = cv2.getTrackbarPos("rn", TRACKBAR_WINDOW)
         min_area_ratio = 0.03
         bottom_band_ratio = 0.75
         margin = 0
@@ -765,7 +779,7 @@ def detail_single_alternation(dir, image_file):
 
 
 if __name__ == "__main__":
-    i = 23
+    i = 68
     #tune_floor_mask_single_image("stock", f"image_{i}.jpg")
     #tune_badminton_mask_single_image("stock", f"image_{i}.jpg")
     detail_single_alternation("stock", f"image_{i}.jpg")

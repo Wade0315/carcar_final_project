@@ -28,7 +28,8 @@ class CameraBase:
         self.ring_v_max = 80
         self.ring_kernel_open = np.ones((1, 1), np.uint8)
         self.ring_kernel_close = np.ones((3, 3), np.uint8)
-        self.ring_floor_top_buffer = 35
+        self.ring_floor_top_min_buffer = 8
+        self.ring_floor_top_max_buffer = 40
         self.ring_above_floor_top = 15
         self.ring_below_floor_top = 55
         self.ring_min_area = 20
@@ -147,6 +148,13 @@ class CameraBase:
         badminton_mask = cv2.morphologyEx(badminton_mask, cv2.MORPH_CLOSE, self.kernel_close)
         return badminton_mask
 
+    def ring_floor_top_buffer(self, floor_top_y):
+        floor_height = self.height - floor_top_y
+        floor_ratio = floor_height / self.height
+        buffer_range = self.ring_floor_top_max_buffer - self.ring_floor_top_min_buffer
+        buffer = self.ring_floor_top_max_buffer - int(buffer_range * floor_ratio)
+        return max(self.ring_floor_top_min_buffer, min(self.ring_floor_top_max_buffer, buffer))
+
     def build_floor_top_search_mask(self, floor_mask):
         if cv2.countNonZero(floor_mask) == 0:
             return np.full((self.height, self.width), 255, dtype=np.uint8)
@@ -156,8 +164,10 @@ class CameraBase:
             floor_y = np.flatnonzero(floor_mask[:, x])
             if len(floor_y) == 0:
                 continue
-            top_y = max(int(floor_y[0]) - self.ring_floor_top_buffer, 0)
-            search_mask[top_y:, x] = 255
+            floor_top_y = int(floor_y[0])
+            top_y = max(floor_top_y - self.ring_floor_top_buffer(floor_top_y), 0)
+            bottom_y = min(floor_top_y + self.ring_below_floor_top, self.height)
+            search_mask[top_y:bottom_y, x] = 255
         return search_mask
 
     def build_black_ring_mask(self, frame, floor_mask):
