@@ -262,6 +262,6 @@ class Camera(CameraBase):
 if __name__ == "__main__":
     setup_logging()
     with Camera() as tracker:
-        tracker.single_test()
-        # for find_ball, error in tracker.streaming():
-        #     logger.info("find_ball=%s error=%s", find_ball, error)
+        #tracker.single_test()
+        for find_ball, error in tracker.streaming():
+            logger.info("find_ball=%s error=%s", find_ball, error)

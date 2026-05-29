@@ -15,8 +15,8 @@ lower_white_hls = np.array([0, 166, 0])
 upper_white_hls = np.array([180, 255, 174])
 lower_white_hsv = np.array([0, 0, 144])
 upper_white_hsv = np.array([180, 53, 255])
-lower_floor = np.array([35, 90, 20])
-upper_floor = np.array([95, 255, 190])
+lower_floor = np.array([35, 90, 55])
+upper_floor = np.array([95, 255, 185])
 
 WINDOW_NAME = "Boundary Tuner"
 TRACKBAR_WINDOW = "Boundary Controls"
@@ -35,9 +35,9 @@ CHANNEL_NAMES = {
     "HSV": ["H", "S", "V"],
 }
 TRACKBAR_PREFIXES = {
-    "ball HLS": "bL",
-    "ball HSV": "bV",
-    "floor": "f",
+    "ball HLS": "ball",
+    "ball HSV": "ball HSV",
+    "floor": "F",
 }
 RING_FLOOR_TOP_BUFFER = 35
 RING_ABOVE_FLOOR_TOP = 15
@@ -55,6 +55,10 @@ RING_MAX_WIDTH = 50
 RING_WHITE_NEAR_RADIUS = 8
 RING_FLOOR_TOUCH_X = 5
 RING_FLOOR_TOUCH_DOWN = 12
+BOARD_IGNORE_LEFT_SIDE_Y_RATIO = 0.50
+BOARD_IGNORE_LEFT_BOTTOM_X_RATIO = 0.18
+BOARD_IGNORE_RIGHT_SIDE_Y_RATIO = 0.50
+BOARD_IGNORE_RIGHT_BOTTOM_X_RATIO = 0.82
 
 
 def nothing(_):
@@ -69,10 +73,10 @@ def setup_trackbar_window(window_name=TRACKBAR_WINDOW, size=TRACKBAR_WINDOW_SIZE
 
 def channel_trackbar_name(channel_name, is_lower, prefix=None):
     short_prefix = TRACKBAR_PREFIXES.get(prefix, prefix)
-    suffix = "-" if is_lower else "+"
+    suffix = "min" if is_lower else "max"
     if short_prefix:
-        return f"{short_prefix} {channel_name}{suffix}"
-    return f"{channel_name}{suffix}"
+        return f"{short_prefix} {channel_name} {suffix}"
+    return f"{channel_name} {suffix}"
 
 
 def create_trackbars(color_space, lower, upper):
@@ -135,12 +139,12 @@ def create_detail_trackbars():
     setup_trackbar_window(TRACKBAR_WINDOW, DETAIL_TRACKBAR_WINDOW_SIZE)
     create_prefixed_trackbars("ball HLS", "HLS", lower_white_hls, upper_white_hls)
     create_prefixed_trackbars("floor", "HSV", lower_floor, upper_floor)
-    cv2.createTrackbar("bo", TRACKBAR_WINDOW, 3, 50, nothing)
-    cv2.createTrackbar("bc", TRACKBAR_WINDOW, 10, 50, nothing)
-    cv2.createTrackbar("fo", TRACKBAR_WINDOW, 5, 50, nothing)
-    cv2.createTrackbar("fc", TRACKBAR_WINDOW, 21, 50, nothing)
-    cv2.createTrackbar("rV", TRACKBAR_WINDOW, 80, 255, nothing)
-    cv2.createTrackbar("rn", TRACKBAR_WINDOW, RING_WHITE_MIN_NONLINE_AREA, 1000, nothing)
+    cv2.createTrackbar("ball open", TRACKBAR_WINDOW, 3, 50, nothing)
+    cv2.createTrackbar("ball close", TRACKBAR_WINDOW, 10, 50, nothing)
+    cv2.createTrackbar("F open", TRACKBAR_WINDOW, 5, 50, nothing)
+    cv2.createTrackbar("F close", TRACKBAR_WINDOW, 21, 50, nothing)
+    cv2.createTrackbar("ring V max", TRACKBAR_WINDOW, 80, 255, nothing)
+    cv2.createTrackbar("line min", TRACKBAR_WINDOW, RING_WHITE_MIN_NONLINE_AREA, 1000, nothing)
 
 
 def get_morph_kernel(name):
@@ -169,9 +173,40 @@ def build_mask(image, color_space, lower, upper):
     return cv2.inRange(converted, lower, upper)
 
 
+def board_ignore_polygons(height, width):
+    left_side_y = int(height * BOARD_IGNORE_LEFT_SIDE_Y_RATIO)
+    left_bottom_x = int(width * BOARD_IGNORE_LEFT_BOTTOM_X_RATIO)
+    right_side_y = int(height * BOARD_IGNORE_RIGHT_SIDE_Y_RATIO)
+    right_bottom_x = int(width * BOARD_IGNORE_RIGHT_BOTTOM_X_RATIO)
+    return [
+        np.array([(0, height - 1), (0, left_side_y), (left_bottom_x, height - 1)], dtype=np.int32),
+        np.array(
+            [(width - 1, height - 1), (width - 1, right_side_y), (right_bottom_x, height - 1)],
+            dtype=np.int32,
+        ),
+    ]
+
+
+def build_roi_keep_mask(height, width):
+    keep_mask = np.full((height, width), 255, dtype=np.uint8)
+    cv2.fillPoly(keep_mask, board_ignore_polygons(height, width), 0)
+    return keep_mask
+
+
+def apply_roi_keep_mask(mask):
+    height, width = mask.shape[:2]
+    return cv2.bitwise_and(mask, mask, mask=build_roi_keep_mask(height, width))
+
+
+def draw_board_ignore_polygons(image):
+    height, width = image.shape[:2]
+    for polygon in board_ignore_polygons(height, width):
+        cv2.polylines(image, [polygon], True, (0, 255, 255), 1)
+
+
 def build_badminton_mask(image, color_space, lower, upper):
     mask = build_mask(image, color_space, lower, upper)
-    return apply_morphology(mask)
+    return apply_roi_keep_mask(apply_morphology(mask))
 
 
 def build_badminton_mask_with_morph(image, color_space, lower, upper, open_size, close_size):
@@ -180,7 +215,7 @@ def build_badminton_mask_with_morph(image, color_space, lower, upper, open_size,
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((open_size, open_size), np.uint8))
     if close_size > 0:
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((close_size, close_size), np.uint8))
-    return mask
+    return apply_roi_keep_mask(mask)
 
 
 def build_floor_top_search_mask(floor_mask, top_buffer=RING_FLOOR_TOP_BUFFER):
@@ -208,7 +243,7 @@ def build_black_ring_mask(image, floor_mask, v_max, open_size, close_size):
         ring_mask = cv2.morphologyEx(ring_mask, cv2.MORPH_OPEN, np.ones((open_size, open_size), np.uint8))
     if close_size > 0:
         ring_mask = cv2.morphologyEx(ring_mask, cv2.MORPH_CLOSE, np.ones((close_size, close_size), np.uint8))
-    return ring_mask
+    return apply_roi_keep_mask(ring_mask)
 
 
 def is_near_floor_top(floor_mask, x, y, above=RING_ABOVE_FLOOR_TOP, below=RING_BELOW_FLOOR_TOP):
@@ -615,19 +650,18 @@ def detail_single_alternation(dir, image_file):
 
     while True:
         view_mode = VIEW_MODES[view_index]
-        use_ball_hsv = cv2.getTrackbarPos("bHSV", TRACKBAR_WINDOW) == 1
-        color_space = "HSV" if use_ball_hsv else "HLS"
+        color_space = "HLS"
         ball_lower, ball_upper = get_prefixed_bounds(f"ball {color_space}", color_space)
         floor_lower, floor_upper = get_prefixed_bounds("floor", "HSV")
-        ball_open = cv2.getTrackbarPos("bo", TRACKBAR_WINDOW)
-        ball_close = cv2.getTrackbarPos("bc", TRACKBAR_WINDOW)
-        floor_open = cv2.getTrackbarPos("fo", TRACKBAR_WINDOW)
-        floor_close = cv2.getTrackbarPos("fc", TRACKBAR_WINDOW)
-        ring_v_max = cv2.getTrackbarPos("rV", TRACKBAR_WINDOW)
-        ring_open = cv2.getTrackbarPos("ro", TRACKBAR_WINDOW)
-        ring_close = cv2.getTrackbarPos("rc", TRACKBAR_WINDOW)
-        ring_white_min = cv2.getTrackbarPos("rw", TRACKBAR_WINDOW)
-        ring_nonline_min = cv2.getTrackbarPos("rn", TRACKBAR_WINDOW)
+        ball_open = cv2.getTrackbarPos("ball open", TRACKBAR_WINDOW)
+        ball_close = cv2.getTrackbarPos("ball close", TRACKBAR_WINDOW)
+        floor_open = cv2.getTrackbarPos("F open", TRACKBAR_WINDOW)
+        floor_close = cv2.getTrackbarPos("F close", TRACKBAR_WINDOW)
+        ring_v_max = cv2.getTrackbarPos("ring V max", TRACKBAR_WINDOW)
+        ring_open = 1
+        ring_close = 3
+        ring_white_min = RING_WHITE_MIN_AREA
+        ring_nonline_min = cv2.getTrackbarPos("line min", TRACKBAR_WINDOW)
         min_area_ratio = 0.03
         bottom_band_ratio = 0.75
         margin = 0
@@ -692,6 +726,7 @@ def detail_single_alternation(dir, image_file):
                 display = floor_result
 
         if view_mode in {"original", "result", "floor_result", "ring_mask"}:
+            draw_board_ignore_polygons(display)
             cv2.drawContours(display, floor_contours, -1, (255, 0, 255), 1)
             for ring in validated_rings:
                 x, y, w, h = ring["bbox"]
@@ -714,7 +749,7 @@ def detail_single_alternation(dir, image_file):
         display = draw_status(
             display,
             view_mode,
-            f"{color_space} ball_HSV={int(use_ball_hsv)}",
+            color_space,
             ball_lower,
             ball_upper,
             help_text="v:view  p:print  d:debug  q:quit",
@@ -730,12 +765,8 @@ def detail_single_alternation(dir, image_file):
             view_index = (view_index + 1) % len(VIEW_MODES)
         if key == ord("p"):
             print(f"ball_color_space = {color_space}")
-            if use_ball_hsv:
-                print("lower_white_hsv = np.array({})".format(ball_lower.tolist()))
-                print("upper_white_hsv = np.array({})".format(ball_upper.tolist()))
-            else:
-                print("lower_white_hls = np.array({})".format(ball_lower.tolist()))
-                print("upper_white_hls = np.array({})".format(ball_upper.tolist()))
+            print("lower_white_hls = np.array({})".format(ball_lower.tolist()))
+            print("upper_white_hls = np.array({})".format(ball_upper.tolist()))
             print(f"kernel_open = np.ones(({ball_open}, {ball_open}), np.uint8)")
             print(f"kernel_close = np.ones(({ball_close}, {ball_close}), np.uint8)")
             print("lower_floor = np.array({})".format(floor_lower.tolist()))
@@ -779,7 +810,7 @@ def detail_single_alternation(dir, image_file):
 
 
 if __name__ == "__main__":
-    i = 68
+    i = 69
     #tune_floor_mask_single_image("stock", f"image_{i}.jpg")
     #tune_badminton_mask_single_image("stock", f"image_{i}.jpg")
     detail_single_alternation("stock", f"image_{i}.jpg")

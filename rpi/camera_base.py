@@ -24,6 +24,11 @@ class CameraBase:
         self.floor_boundary_margin = 0
         self.floor_bottom_band_ratio = 0.75
         self.min_floor_area = int(self.width * self.height * 0.03)
+        self.board_ignore_enabled = True
+        self.board_ignore_left_side_y_ratio = 0.50
+        self.board_ignore_left_bottom_x_ratio = 0.18
+        self.board_ignore_right_side_y_ratio = 0.50
+        self.board_ignore_right_bottom_x_ratio = 0.82
 
         self.ring_v_max = 80
         self.ring_kernel_open = np.ones((1, 1), np.uint8)
@@ -141,12 +146,45 @@ class CameraBase:
             floor_mask = cv2.erode(floor_mask, margin_kernel)
         return floor_mask
 
+    def board_ignore_polygons(self):
+        if not self.board_ignore_enabled:
+            return []
+
+        left_side_y = int(self.height * self.board_ignore_left_side_y_ratio)
+        left_bottom_x = int(self.width * self.board_ignore_left_bottom_x_ratio)
+        right_side_y = int(self.height * self.board_ignore_right_side_y_ratio)
+        right_bottom_x = int(self.width * self.board_ignore_right_bottom_x_ratio)
+        return [
+            np.array(
+                [(0, self.height - 1), (0, left_side_y), (left_bottom_x, self.height - 1)],
+                dtype=np.int32,
+            ),
+            np.array(
+                [
+                    (self.width - 1, self.height - 1),
+                    (self.width - 1, right_side_y),
+                    (right_bottom_x, self.height - 1),
+                ],
+                dtype=np.int32,
+            ),
+        ]
+
+    def build_roi_keep_mask(self):
+        keep_mask = np.full((self.height, self.width), 255, dtype=np.uint8)
+        polygons = self.board_ignore_polygons()
+        if polygons:
+            cv2.fillPoly(keep_mask, polygons, 0)
+        return keep_mask
+
+    def apply_roi_keep_mask(self, mask):
+        return cv2.bitwise_and(mask, mask, mask=self.build_roi_keep_mask())
+
     def build_badminton_mask(self, frame):
         hls = cv2.cvtColor(frame, cv2.COLOR_BGR2HLS)
         badminton_mask = cv2.inRange(hls, self.lower_white, self.upper_white)
         badminton_mask = cv2.morphologyEx(badminton_mask, cv2.MORPH_OPEN, self.kernel_open)
         badminton_mask = cv2.morphologyEx(badminton_mask, cv2.MORPH_CLOSE, self.kernel_close)
-        return badminton_mask
+        return self.apply_roi_keep_mask(badminton_mask)
 
     def ring_floor_top_buffer(self, floor_top_y):
         floor_height = self.height - floor_top_y
@@ -181,7 +219,7 @@ class CameraBase:
         ring_mask = cv2.bitwise_and(ring_mask, ring_mask, mask=search_mask)
         ring_mask = cv2.morphologyEx(ring_mask, cv2.MORPH_OPEN, self.ring_kernel_open)
         ring_mask = cv2.morphologyEx(ring_mask, cv2.MORPH_CLOSE, self.ring_kernel_close)
-        return ring_mask
+        return self.apply_roi_keep_mask(ring_mask)
 
     def is_near_floor_top(self, floor_mask, x, y):
         if cv2.countNonZero(floor_mask) == 0:
