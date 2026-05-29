@@ -17,18 +17,18 @@ class CameraBase:
         self.kernel_open = np.ones((3, 3), np.uint8)
         self.kernel_close = np.ones((10, 10), np.uint8)
 
-        self.lower_floor = np.array([35, 90, 20])
-        self.upper_floor = np.array([95, 255, 190])
+        self.lower_floor = np.array([35, 90, 35])
+        self.upper_floor = np.array([95, 255, 185])
         self.floor_kernel_open = np.ones((5, 5), np.uint8)
         self.floor_kernel_close = np.ones((21, 21), np.uint8)
         self.floor_boundary_margin = 0
         self.floor_bottom_band_ratio = 0.75
         self.min_floor_area = int(self.width * self.height * 0.03)
         self.board_ignore_enabled = True
-        self.board_ignore_left_side_y_ratio = 0.50
-        self.board_ignore_left_bottom_x_ratio = 0.18
+        self.board_ignore_left_side_y_ratio = 0.38
+        self.board_ignore_left_bottom_x_ratio = 0.32
         self.board_ignore_right_side_y_ratio = 0.50
-        self.board_ignore_right_bottom_x_ratio = 0.82
+        self.board_ignore_right_bottom_x_ratio = 0.74
 
         self.ring_v_max = 80
         self.ring_kernel_open = np.ones((1, 1), np.uint8)
@@ -44,7 +44,7 @@ class CameraBase:
         self.ring_white_roi_up = 45
         self.ring_white_roi_down = 35
         self.ring_white_min_area = 120
-        self.ring_white_min_nonline_area = 100
+        self.ring_white_min_nonline_area = 33
         self.ring_max_width = 50
         self.ring_max_height = 50
         self.ring_white_near_radius = 8

@@ -15,7 +15,7 @@ lower_white_hls = np.array([0, 166, 0])
 upper_white_hls = np.array([180, 255, 174])
 lower_white_hsv = np.array([0, 0, 144])
 upper_white_hsv = np.array([180, 53, 255])
-lower_floor = np.array([35, 90, 55])
+lower_floor = np.array([35, 90, 35])
 upper_floor = np.array([95, 255, 185])
 
 WINDOW_NAME = "Boundary Tuner"
@@ -55,11 +55,10 @@ RING_MAX_WIDTH = 50
 RING_WHITE_NEAR_RADIUS = 8
 RING_FLOOR_TOUCH_X = 5
 RING_FLOOR_TOUCH_DOWN = 12
-BOARD_IGNORE_LEFT_SIDE_Y_RATIO = 0.50
-BOARD_IGNORE_LEFT_BOTTOM_X_RATIO = 0.18
+BOARD_IGNORE_LEFT_SIDE_Y_RATIO = 0.38
+BOARD_IGNORE_LEFT_BOTTOM_X_RATIO = 0.32
 BOARD_IGNORE_RIGHT_SIDE_Y_RATIO = 0.50
-BOARD_IGNORE_RIGHT_BOTTOM_X_RATIO = 0.82
-
+BOARD_IGNORE_RIGHT_BOTTOM_X_RATIO = 0.74
 
 def nothing(_):
     pass
