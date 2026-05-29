@@ -227,7 +227,31 @@ class Camera(CameraBase):
         logger.info("saved %s", filename)
         logger.info("finish")
 
-    def capture_images(self, output_dir="/home/waryt/Desktop/image", interval=1.0, max_images=None):
+    def capture_images(self, output_dir="/home/waryt/Desktop/image", max_images=None):
+        os.makedirs(output_dir, exist_ok=True)
+        logger.info("capturing images to %s. Press 't' to save, 'q' to quit.", output_dir)
+
+        count = 0
+        try:
+            while max_images is None or count < max_images:
+                frame = self.picam2.capture_array()
+                frame = self.fix_orientation(frame)
+                cv2.imshow("Capture View", frame)
+
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord("t"):
+                    timestamp = time.strftime("%Y%m%d_%H%M%S")
+                    filename = os.path.join(output_dir, f"image_{timestamp}_{count:04d}.jpg")
+                    cv2.imwrite(filename, frame)
+                    logger.info("saved %s", filename)
+                    count += 1
+                elif key == ord("q"):
+                    break
+
+        except KeyboardInterrupt:
+            logger.info("capture stopped by user")
+
+    def capture_images_interval(self, output_dir="/home/waryt/Desktop/image", interval=1.0, max_images=None):
         os.makedirs(output_dir, exist_ok=True)
         logger.info("capturing images to %s every %.1f second(s)", output_dir, interval)
 

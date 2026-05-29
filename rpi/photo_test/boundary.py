@@ -809,7 +809,7 @@ def detail_single_alternation(dir, image_file):
 
 
 if __name__ == "__main__":
-    i = 69
+    i = 71
     #tune_floor_mask_single_image("stock", f"image_{i}.jpg")
     #tune_badminton_mask_single_image("stock", f"image_{i}.jpg")
     detail_single_alternation("stock", f"image_{i}.jpg")
