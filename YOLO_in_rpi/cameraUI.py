@@ -117,7 +117,7 @@ class Camera(YOLOCamera):
                     cv2.imshow("Robot View", processed_frame)
 
                 if floor_mask is not None and yolo_mask is not None:
-                    cv2.imshow("Floor Mask", floor_mask)
+                    #cv2.imshow("Floor Mask", floor_mask)
                     cv2.imshow("YOLO Mask", yolo_mask)
 
                 at_frame += 1
