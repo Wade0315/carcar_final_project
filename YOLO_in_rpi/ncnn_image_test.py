@@ -38,38 +38,83 @@ class NcnnImageTester(YOLOCamera):
         self.class_names = self.load_class_names(self.model_path)
         self.model = self.load_model(self.model_path)
 
-    def draw_candidates(self, frame, candidates):
-        annotated = frame.copy()
+    def draw_candidates(self, frame, candidates, target=None):
+        header_h = 24
+        canvas = np.zeros((self.height + header_h, self.width, 3), dtype=np.uint8)
+        annotated = canvas[header_h:, :]
+        annotated[:] = frame
         cv2.line(annotated, (self.width // 2, 0), (self.width // 2, self.height), (0, 255, 255), 1)
 
         for candidate in candidates:
             x1, y1, x2, y2 = candidate["bbox"]
             target_cx = candidate["target_cx"]
             target_cy = candidate["target_cy"]
-            label = f"{candidate['class_name']} {candidate['confidence']:.2f}"
+            color = (255, 128, 255) if candidate.get("is_head") else (255, 0, 0)
 
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), (255, 0, 0), 2)
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
             cv2.circle(annotated, (target_cx, target_cy), 4, (0, 0, 255), -1)
+            self.draw_candidate_label(annotated, candidate, color)
+
+        if target is not None:
+            self.draw_tracking_target(canvas, annotated, target, candidates)
+        else:
             cv2.putText(
-                annotated,
-                label,
-                (x1, max(y1 - 5, 12)),
+                canvas,
+                "none",
+                (6, 17),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.4,
-                (255, 0, 0),
-                1,
-            )
-            cv2.putText(
-                annotated,
-                f"error={candidate['error']}",
-                (x1, min(y2 + 15, self.height - 5)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.4,
-                (0, 255, 0),
+                0.42,
+                (0, 255, 255),
                 1,
             )
 
-        return annotated
+        return canvas
+
+    def draw_candidate_label(self, frame, candidate, color):
+        x1, y1, x2, y2 = candidate["bbox"]
+        label = f"{candidate['class_name']} {candidate['confidence']:.2f}"
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale = 0.34
+        thickness = 1
+        text_w, text_h = cv2.getTextSize(label, font, scale, thickness)[0]
+
+        label_x = x2 + 4
+        label_y = y1 + text_h + 2
+        if label_x + text_w >= self.width:
+            label_x = max(0, x1 - text_w - 4)
+        if label_y >= y2:
+            label_y = max(text_h + 2, y1 - 4)
+        if label_y - text_h < 0:
+            label_y = min(self.height - 2, y2 + text_h + 4)
+
+        cv2.putText(frame, label, (label_x, label_y), font, scale, color, thickness)
+
+    def draw_tracking_target(self, canvas, frame, target, candidates):
+        x1, y1, x2, y2 = target["bbox"]
+        target_cx = target["target_cx"]
+        target_cy = target["target_cy"]
+        label = self.build_header_label(target, candidates)
+
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
+        cv2.circle(frame, (target_cx, target_cy), 7, (0, 255, 0), -1)
+        cv2.line(frame, (self.width // 2, target_cy), (target_cx, target_cy), (0, 255, 0), 2)
+        cv2.putText(
+            canvas,
+            label,
+            (6, 17),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.42,
+            (0, 255, 0),
+            1,
+        )
+
+    def build_header_label(self, target, candidates):
+        head_count = sum(1 for candidate in candidates if candidate.get("is_head"))
+        body_count = len(candidates) - head_count
+        return (
+            f"{target['class_name']} error={target['error']} "
+            f"body={body_count} head={head_count} conf={target['confidence']:.2f}"
+        )
 
     def inspect_outputs(self, frame):
         input_image, _, _, _ = self.preprocess_for_ncnn(frame)
@@ -201,16 +246,20 @@ def main():
             break
 
         candidates = tester.detect_yolo_candidates(frame)
-        annotated = tester.draw_candidates(frame, candidates)
+        find_ball, error, target = tester.choose_ball(candidates)
+        annotated = tester.draw_candidates(frame, candidates, target)
 
         output_path = output_dir / f"{image_path.stem}_candidates.jpg"
         cv2.imwrite(str(output_path), annotated)
         logger.info(
-            "[%s/%s] %s candidates=%s -> %s",
+            "[%s/%s] %s candidates=%s find_ball=%s error=%s target=%s -> %s",
             index,
             len(images),
             image_path.name,
             len(candidates),
+            find_ball,
+            error,
+            target["class_name"] if target is not None else None,
             output_path,
         )
 

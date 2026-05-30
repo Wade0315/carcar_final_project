@@ -362,6 +362,7 @@ class Camera(CameraBase):
                 "confidence": detection["confidence"],
                 "class_id": class_id,
                 "class_name": class_name,
+                "is_head": "head" in class_name,
                 "rect_cx": target_cx,
                 "rect_cy": target_cy,
                 "target_cx": target_cx,

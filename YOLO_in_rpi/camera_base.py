@@ -70,12 +70,14 @@ class CameraBase:
 
     def choose_ball(self, candidate):
         if len(candidate) > 0:
+            tracking_candidates = self.select_tracking_candidates(candidate)
+
             if self.target_x is None:
-                target = min(candidate, key=lambda b: abs(b["error"]))
+                target = min(tracking_candidates, key=lambda b: abs(b["error"]))
                 distance = 0
             else:
                 target = min(
-                    candidate,
+                    tracking_candidates,
                     key=lambda b: (b["target_cx"] - self.target_x) ** 2
                     + (b["target_cy"] - self.target_y) ** 2
                 )
@@ -110,6 +112,12 @@ class CameraBase:
         self.target_y = None
         self.last_error = None
         return False, None, None
+
+    def select_tracking_candidates(self, candidates):
+        head_candidates = [candidate for candidate in candidates if candidate.get("is_head")]
+        if head_candidates:
+            return head_candidates
+        return candidates
 
     def __enter__(self):
         return self
