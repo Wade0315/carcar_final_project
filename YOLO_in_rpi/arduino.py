@@ -53,6 +53,8 @@ class Arduino:
         self.ser.reset_input_buffer()
         self.ser.reset_output_buffer()
         logger.info("serial connected baudrate=%s", self.baudrate)
+        self.send("rdy")
+        time.sleep(0.3)
 
     def send(self, msg):
         if self.ser is None:

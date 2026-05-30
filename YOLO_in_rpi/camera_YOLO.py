@@ -46,6 +46,8 @@ class Camera(CameraBase):
 
         self.picam2 = Picamera2()
         self.closed = False
+        self.frame_interval = 2
+
         self.model_path = os.getenv("YOLO_MODEL", model_path)
         self.confidence = float(os.getenv("YOLO_CONF", confidence or 0.25))
         self.imgsz = int(os.getenv("YOLO_IMGSZ", imgsz or max(self.width, self.height)))
@@ -55,7 +57,6 @@ class Camera(CameraBase):
         self.last_detection_count = 0
         self.last_candidate_count = 0
         self.last_max_confidence = None
-        self.model = self.load_model(self.model_path)
 
         config = self.picam2.create_video_configuration(
             main={"format": "RGB888", "size": (self.width, self.height)},
@@ -66,8 +67,10 @@ class Camera(CameraBase):
         self.picam2.start()
 
         logger.info("camera activating...")
-        time.sleep(2)
+        time.sleep(3)
         self.lock_current_camera_controls()
+        self.model = self.load_model(self.model_path)
+        time.sleep(3)
 
     def load_model(self, model_path):
         try:
@@ -172,6 +175,7 @@ class Camera(CameraBase):
 
         logger.debug("NCNN output shapes: %s", [output.shape for output in outputs])
         detections = self.decode_yolo_outputs(outputs)
+        #detection: {"box": (x1, y1, x2, y2),"confidence": confidence,"class_id": class_id,}
         if not detections:
             logger.info("no detections above confidence %.2f", self.confidence)
             return []
@@ -399,7 +403,7 @@ class Camera(CameraBase):
                 raw_frame = self.picam2.capture_array()
                 raw_frame = self.fix_orientation(raw_frame)
 
-                if at_frame % 3 == 0:
+                if at_frame % self.frame_interval == 0:
                     find_ball, error = self.process_frame(raw_frame)
                     yield find_ball, error
 

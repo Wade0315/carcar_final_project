@@ -1,5 +1,6 @@
 import os
 import logging
+import time
 from enum import Enum
 import arduino
 import camera_YOLO as camera
@@ -30,7 +31,6 @@ def setup_logging():
 
 
 def main():
-    mega = arduino.Arduino()
 
     found_count = 0
     last_sent_state = None
@@ -38,6 +38,7 @@ def main():
     try:
         with camera.Camera() as cam:
             state = Status.NOT_FOUND
+            mega = arduino.Arduino()
             mega.send(state.value)
             last_sent_state = state
 
