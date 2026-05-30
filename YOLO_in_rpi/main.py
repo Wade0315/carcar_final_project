@@ -1,14 +1,9 @@
 import os
-import time
 import logging
 from enum import Enum
-import psutil
 import arduino
-# import camera
-#test camera
-import cameraUI as camera
+import camera_YOLO as camera
 
-MISMATCH_TOLERANCE = 5
 class Status(Enum):
     ERROR = 0
     NOT_FOUND = 1
@@ -16,7 +11,6 @@ class Status(Enum):
     OUT_OF_BOUND = 3
     IDLE = 4
 
-MISMATCH_TOLERANCE = 5      
 FOUND_TOLERANCE = 2         
 CLOSE_ERROR = 20           
 
