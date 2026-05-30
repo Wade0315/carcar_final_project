@@ -51,16 +51,6 @@ class Camera(YOLOCamera):
     def draw_center_line(self, frame):
         cv2.line(frame, (self.width // 2, 0), (self.width // 2, self.height), (0, 255, 255), 1)
 
-    def draw_floor_boundary(self, frame, floor_mask):
-        contours, _ = cv2.findContours(floor_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        cv2.drawContours(frame, contours, -1, (255, 0, 255), 2)
-
-    def build_floor_mask_debug_image(self, floor_mask):
-        floor_view = cv2.cvtColor(floor_mask, cv2.COLOR_GRAY2BGR)
-        contours, _ = cv2.findContours(floor_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        cv2.drawContours(floor_view, contours, -1, (0, 0, 255), 2)
-        return floor_view
-
     def draw_candidates(self, frame, candidates):
         for ball in candidates:
             x1, y1, x2, y2 = ball["bbox"]
@@ -182,6 +172,6 @@ class Camera(YOLOCamera):
 if __name__ == "__main__":
     setup_logging()
     with Camera() as tracker:
-        tracker.single_test()
-        # for find_ball, error in tracker.streaming():
-        #     logger.info("find_ball=%s error=%s", find_ball, error)
+        #tracker.single_test()
+        for find_ball, error in tracker.streaming():
+            logger.info("find_ball=%s error=%s", find_ball, error)
