@@ -52,6 +52,9 @@ class Camera(CameraBase):
         self.target_class = os.getenv("YOLO_CLASS", target_class or "").strip().lower()
         self.iou_threshold = float(os.getenv("YOLO_IOU", "0.45"))
         self.class_names = self.load_class_names(self.model_path)
+        self.last_detection_count = 0
+        self.last_candidate_count = 0
+        self.last_max_confidence = None
         self.model = self.load_model(self.model_path)
 
         config = self.picam2.create_video_configuration(
@@ -157,6 +160,10 @@ class Camera(CameraBase):
         return floor_mask, candidates, target, find_ball, error
 
     def detect_yolo_candidates(self, frame):
+        self.last_detection_count = 0
+        self.last_candidate_count = 0
+        self.last_max_confidence = None
+
         input_image, scale, pad_x, pad_y = self.preprocess_for_ncnn(frame)
         outputs = self.run_ncnn(input_image)
         if not outputs:
@@ -170,7 +177,9 @@ class Camera(CameraBase):
             return []
 
         detections = self.nms(detections)
+        self.last_detection_count = len(detections)
         candidates = self.build_candidates(detections, scale, pad_x, pad_y)
+        self.last_candidate_count = len(candidates)
         logger.info("detections=%s candidates=%s", len(detections), len(candidates))
         return candidates
 
@@ -241,6 +250,7 @@ class Camera(CameraBase):
                 detections.append(detection)
 
         if max_confidence is not None:
+            self.last_max_confidence = max_confidence
             logger.info("max raw confidence=%.4f threshold=%.4f", max_confidence, self.confidence)
         return detections
 

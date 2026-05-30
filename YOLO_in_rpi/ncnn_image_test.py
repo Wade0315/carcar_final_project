@@ -208,6 +208,7 @@ def parse_args():
     parser.add_argument("--show", action="store_true")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--inspect", action="store_true")
+    parser.add_argument("--keep-tracking-state", action="store_true")
     return parser.parse_args()
 
 
@@ -246,20 +247,23 @@ def main():
             break
 
         candidates = tester.detect_yolo_candidates(frame)
+        if not args.keep_tracking_state:
+            tester.reset_tracking()
         find_ball, error, target = tester.choose_ball(candidates)
         annotated = tester.draw_candidates(frame, candidates, target)
 
         output_path = output_dir / f"{image_path.stem}_candidates.jpg"
         cv2.imwrite(str(output_path), annotated)
         logger.info(
-            "[%s/%s] %s candidates=%s find_ball=%s error=%s target=%s -> %s",
+            "[%s/%s] %s confidence=%s detection=%s candidate=%s target=%s error=%s -> %s",
             index,
             len(images),
             image_path.name,
-            len(candidates),
-            find_ball,
-            error,
+            format_confidence(tester.last_max_confidence),
+            tester.last_detection_count,
+            tester.last_candidate_count,
             target["class_name"] if target is not None else None,
+            error if find_ball else None,
             output_path,
         )
 
@@ -271,6 +275,12 @@ def main():
 
     if args.show:
         cv2.destroyAllWindows()
+
+
+def format_confidence(confidence):
+    if confidence is None:
+        return "None"
+    return f"{confidence:.2f}"
 
 
 if __name__ == "__main__":

@@ -29,6 +29,12 @@ class CameraBase:
         self.head_end_band_ratio = 0.25
         self.head_width_ratio = 0.85
 
+    def reset_tracking(self):
+        self.target_x = None
+        self.target_y = None
+        self.last_error = None
+        self.lost_count = 0
+
     def fix_orientation(self, frame):
         if self.flip_code is None:
             return frame
