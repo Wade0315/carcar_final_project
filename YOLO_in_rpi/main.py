@@ -6,7 +6,7 @@ import psutil
 import arduino
 # import camera
 #test camera
-import cameraFAKE as camera
+import cameraUI as camera
 
 MISMATCH_TOLERANCE = 5
 class Status(Enum):
