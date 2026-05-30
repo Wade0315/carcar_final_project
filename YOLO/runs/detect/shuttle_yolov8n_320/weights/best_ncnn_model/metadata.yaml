@@ -1,0 +1,20 @@
+description: Ultralytics best model trained on shuttle.v1i.yolov8\data.yaml
+author: Ultralytics
+date: '2026-05-30T11:22:59.379388'
+version: 8.4.56
+license: AGPL-3.0 License (https://ultralytics.com/license)
+docs: https://docs.ultralytics.com
+stride: 32
+task: detect
+batch: 1
+imgsz:
+- 320
+- 320
+names:
+  0: shuttlecock
+  1: shuttlecock_head
+args:
+  batch: 1
+  half: false
+channels: 3
+end2end: false

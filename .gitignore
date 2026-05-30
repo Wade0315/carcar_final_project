@@ -2,7 +2,14 @@
 .venv/
 .vscode/
 __pycache__/
+arduino/
+
+#YOLO image
+YOLO/image_test/
+YOLO/shuttle.v1i.yolov8/
+YOLO/stock/
 
 *.txt
 *.jpg
 *.png
+*.zip
