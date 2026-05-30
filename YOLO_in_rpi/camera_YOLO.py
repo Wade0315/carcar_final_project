@@ -9,7 +9,7 @@ import numpy as np
 from camera_base import CameraBase
 
 logger = logging.getLogger(__name__)
-DEFAULT_MODEL_PATH = "/home/waryt/Desktop/best_ncnn_model"
+DEFAULT_MODEL_PATH = "/home/waryt/YOLO/best_ncnn_model"
 
 
 def setup_logging():
@@ -157,17 +157,22 @@ class Camera(CameraBase):
         return floor_mask, candidates, target, find_ball, error
 
     def detect_yolo_candidates(self, frame):
-        input_tensor, scale, pad_x, pad_y = self.preprocess_for_ncnn(frame)
-        outputs = self.run_ncnn(input_tensor)
+        input_image, scale, pad_x, pad_y = self.preprocess_for_ncnn(frame)
+        outputs = self.run_ncnn(input_image)
         if not outputs:
+            logger.warning("NCNN returned no outputs")
             return []
 
+        logger.debug("NCNN output shapes: %s", [output.shape for output in outputs])
         detections = self.decode_yolo_outputs(outputs)
         if not detections:
+            logger.info("no detections above confidence %.2f", self.confidence)
             return []
 
         detections = self.nms(detections)
-        return self.build_candidates(detections, scale, pad_x, pad_y)
+        candidates = self.build_candidates(detections, scale, pad_x, pad_y)
+        logger.info("detections=%s candidates=%s", len(detections), len(candidates))
+        return candidates
 
     def preprocess_for_ncnn(self, frame):
         source_h, source_w = frame.shape[:2]
@@ -181,16 +186,22 @@ class Camera(CameraBase):
         pad_y = (self.imgsz - resized_h) // 2
         padded[pad_y:pad_y + resized_h, pad_x:pad_x + resized_w] = resized
 
-        rgb = cv2.cvtColor(padded, cv2.COLOR_BGR2RGB)
-        chw = rgb.transpose(2, 0, 1).astype(np.float32) / 255.0
-        return chw, scale, pad_x, pad_y
+        return padded, scale, pad_x, pad_y
 
-    def run_ncnn(self, input_tensor):
+    def run_ncnn(self, input_image):
         input_name = self.model.input_names()[0]
         output_names = sorted(self.model.output_names())
+        input_image = np.ascontiguousarray(input_image)
+        input_mat = self.ncnn.Mat.from_pixels(
+            input_image,
+            self.ncnn.Mat.PixelType.PIXEL_BGR2RGB,
+            self.imgsz,
+            self.imgsz,
+        )
+        input_mat.substract_mean_normalize([], [1 / 255.0, 1 / 255.0, 1 / 255.0])
 
         with self.model.create_extractor() as extractor:
-            extractor.input(input_name, self.ncnn.Mat(input_tensor))
+            extractor.input(input_name, input_mat)
             outputs = []
             for output_name in output_names:
                 result = extractor.extract(output_name)
@@ -206,29 +217,68 @@ class Camera(CameraBase):
 
     def decode_yolo_outputs(self, outputs):
         detections = []
+        max_confidence = None
         for output in outputs:
             predictions = self.normalize_output_shape(output)
             if predictions is None:
                 continue
 
+            logger.debug("NCNN prediction shape=%s", predictions.shape)
             for prediction in predictions:
                 if len(prediction) < 5:
                     continue
 
-                box = prediction[:4]
-                scores = prediction[4:]
-                class_id = int(np.argmax(scores))
-                confidence = float(scores[class_id])
+                detection = self.decode_prediction(prediction)
+                if detection is None:
+                    continue
+
+                confidence = detection["confidence"]
+                if max_confidence is None or confidence > max_confidence:
+                    max_confidence = confidence
                 if confidence < self.confidence:
                     continue
 
-                cx, cy, w, h = [float(value) for value in box]
-                detections.append({
-                    "box": (cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2),
-                    "confidence": confidence,
-                    "class_id": class_id,
-                })
+                detections.append(detection)
+
+        if max_confidence is not None:
+            logger.info("max raw confidence=%.4f threshold=%.4f", max_confidence, self.confidence)
         return detections
+
+    def decode_prediction(self, prediction):
+        if self.is_postprocessed_detection(prediction):
+            x1, y1, x2, y2, confidence, class_id = [float(value) for value in prediction]
+            return {
+                "box": (x1, y1, x2, y2),
+                "confidence": confidence,
+                "class_id": int(class_id),
+            }
+
+        box = prediction[:4]
+        scores = prediction[4:]
+        class_id = int(np.argmax(scores))
+        confidence = float(scores[class_id])
+
+        cx, cy, w, h = [float(value) for value in box]
+        return {
+            "box": (cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2),
+            "confidence": confidence,
+            "class_id": class_id,
+        }
+
+    def is_postprocessed_detection(self, prediction):
+        if len(prediction) != 6:
+            return False
+
+        x1, y1, x2, y2, confidence, class_id = [float(value) for value in prediction]
+        if not (0 <= confidence <= 1):
+            return False
+        if abs(class_id - round(class_id)) > 1e-3:
+            return False
+        if x2 <= x1 or y2 <= y1:
+            return False
+
+        class_count = max(len(self.class_names), 1)
+        return 0 <= int(round(class_id)) < class_count
 
     def normalize_output_shape(self, output):
         output = np.asarray(output)

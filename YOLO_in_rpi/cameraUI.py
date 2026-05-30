@@ -21,6 +21,7 @@ class Camera(YOLOCamera):
 
     def process_frame(self, frame):
         floor_mask, candidates, target, find_ball, error = self.detect_frame(frame)
+        logger.info("debug candidates=%s find_ball=%s error=%s", len(candidates), find_ball, error)
         yolo_mask = self.build_yolo_mask(frame, candidates)
         self.visualize_frame(frame, floor_mask, candidates, target)
         return frame, floor_mask, yolo_mask, find_ball, error
@@ -79,6 +80,12 @@ class Camera(YOLOCamera):
         contours, _ = cv2.findContours(floor_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         cv2.drawContours(frame, contours, -1, (255, 0, 255), 2)
 
+    def build_floor_mask_debug_image(self, floor_mask):
+        floor_view = cv2.cvtColor(floor_mask, cv2.COLOR_GRAY2BGR)
+        contours, _ = cv2.findContours(floor_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cv2.drawContours(floor_view, contours, -1, (0, 0, 255), 2)
+        return floor_view
+
     def draw_candidates(self, frame, candidates):
         for ball in candidates:
             x1, y1, x2, y2 = ball["bbox"]
@@ -131,12 +138,13 @@ class Camera(YOLOCamera):
         finally:
             self.close()
 
-    def single_test(self, output_dir="/home/waryt/Desktop/image", filename=None):
+    def single_test(self, output_dir="/home/waryt/YOLO/image", filename=None):
         logger.info("capturing photo...")
         os.makedirs(output_dir, exist_ok=True)
 
         raw_frame = self.picam2.capture_array()
         raw_frame = self.fix_orientation(raw_frame)
+        original_frame = raw_frame.copy()
 
         processed_frame, floor_mask, yolo_mask, find_ball, error = self.process_frame(raw_frame)
         logger.info("find_ball=%s error=%s", find_ball, error)
@@ -145,12 +153,14 @@ class Camera(YOLOCamera):
             timestamp = time.strftime("%Y%m%d_%H%M%S")
             filename = f"yolo_{timestamp}.jpg"
 
-        cv2.imwrite(os.path.join(output_dir, filename), processed_frame)
+        floor_mask_debug = self.build_floor_mask_debug_image(floor_mask)
+        cv2.imwrite(os.path.join(output_dir, f"original_{filename}"), original_frame)
+        cv2.imwrite(os.path.join(output_dir, f"floor_mask_{filename}"), floor_mask_debug)
         cv2.imwrite(os.path.join(output_dir, f"yolo_mask_{filename}"), yolo_mask)
-        cv2.imwrite(os.path.join(output_dir, f"floor_{filename}"), floor_mask)
+        cv2.imwrite(os.path.join(output_dir, f"debug_{filename}"), processed_frame)
         logger.info("finish")
 
-    def capture_images(self, output_dir="/home/waryt/Desktop/image", max_images=None):
+    def capture_images(self, output_dir="/home/waryt/YOLO/image", max_images=None):
         os.makedirs(output_dir, exist_ok=True)
         logger.info("capturing images to %s. Press 't' to save, 'q' to quit.", output_dir)
 
