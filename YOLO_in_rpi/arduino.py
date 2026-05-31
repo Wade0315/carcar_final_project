@@ -19,7 +19,7 @@ def setup_logging():
     logger.info("logging initialized level=%s", logging.getLevelName(level))
 
 class Arduino:
-    def __init__(self, baudrate=9600, timeout=1):
+    def __init__(self, baudrate=9600, timeout=0):
         self.baudrate = baudrate
         self.timeout = timeout
         self.ser = None
@@ -53,6 +53,8 @@ class Arduino:
         self.ser.reset_input_buffer()
         self.ser.reset_output_buffer()
         logger.info("serial connected baudrate=%s", self.baudrate)
+        self.send("rdy")
+        time.sleep(0.3)
 
     def send(self, msg):
         if self.ser is None:
@@ -63,26 +65,17 @@ class Arduino:
             msg += "\n"
 
         self.ser.write(msg.encode())
-        logger.debug("sent: %s", msg.strip())
+        logger.info("send to [Arduino]: %s", msg.strip())
 
     def receive(self, wait_time=0.5):
         if self.ser is None:
             logger.warning("serial not connected")
             return None
-        messages = []
-        start = time.time()
 
-        while time.time() - start < wait_time:
-            while self.ser.in_waiting > 0:
-                msg = self.ser.readline().decode(errors="ignore").strip()
-                if msg:
-                    messages.append(msg)
-            time.sleep(0.005)
-            return messages
-
-    def print_all(self, messages):
-        for msg in messages:
-            logging.debug(msg)
+        while self.ser.in_waiting > 0:
+            msg = self.ser.readline().decode(errors="ignore").strip()
+            logger.info("from [Arduino]: %s", msg)
+            return msg
         
     def close(self):
         if self.ser is not None:

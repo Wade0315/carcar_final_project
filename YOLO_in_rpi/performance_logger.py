@@ -1,0 +1,91 @@
+import csv
+import logging
+from collections import deque
+from pathlib import Path
+
+
+logger = logging.getLogger(__name__)
+PERF_LOG_FIELDS = [
+    "timestamp",
+    "frame_index",
+    "frame_interval",
+    "frame_budget_ms",
+    "capture_ms",
+    "preprocess_ms",
+    "inference_ms",
+    "ncnn_prepare_ms",
+    "ncnn_normalize_ms",
+    "ncnn_input_ms",
+    "ncnn_extract_ms",
+    "ncnn_numpy_ms",
+    "postprocess_ms",
+    "processing_ms",
+    "processed_gap_ms",
+    "effective_fps",
+    "budget_overrun_ms",
+    "over_budget",
+    "detections",
+    "candidates",
+    "find_ball",
+    "error",
+]
+
+
+class PerformanceLogger:
+    def __init__(self, path, summary_interval=30):
+        self.path = Path(path).expanduser()
+        self.summary_interval = max(1, summary_interval)
+        self.samples = deque(maxlen=self.summary_interval)
+        self.total_samples = 0
+        self.total_over_budget = 0
+
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        file_exists = self.path.exists() and self.path.stat().st_size > 0
+        self.file = self.path.open("a", newline="", encoding="utf-8")
+        self.writer = csv.DictWriter(self.file, fieldnames=PERF_LOG_FIELDS)
+        if not file_exists:
+            self.writer.writeheader()
+            self.file.flush()
+        logger.info("performance log=%s summary_interval=%s", self.path, self.summary_interval)
+
+    def record(self, sample):
+        self.writer.writerow({field: sample.get(field) for field in PERF_LOG_FIELDS})
+        self.samples.append(sample)
+        self.total_samples += 1
+        if sample["over_budget"]:
+            self.total_over_budget += 1
+
+        if self.total_samples % self.summary_interval == 0:
+            self.file.flush()
+            self.log_summary()
+
+    def log_summary(self):
+        if not self.samples:
+            return
+
+        inference_times = [sample["inference_ms"] for sample in self.samples]
+        processing_times = [sample["processing_ms"] for sample in self.samples]
+        effective_fps_values = [
+            sample["effective_fps"] for sample in self.samples if sample["effective_fps"] is not None
+        ]
+        recent_overruns = sum(sample["over_budget"] for sample in self.samples)
+        logger.info(
+            "perf summary samples=%s inference_ms(avg=%.1f max=%.1f) "
+            "processing_ms(avg=%.1f max=%.1f) effective_fps(avg=%.1f) "
+            "over_budget=%s/%s total_over_budget=%s/%s",
+            len(self.samples),
+            sum(inference_times) / len(inference_times),
+            max(inference_times),
+            sum(processing_times) / len(processing_times),
+            max(processing_times),
+            sum(effective_fps_values) / len(effective_fps_values) if effective_fps_values else 0,
+            recent_overruns,
+            len(self.samples),
+            self.total_over_budget,
+            self.total_samples,
+        )
+
+    def close(self):
+        self.log_summary()
+        self.file.flush()
+        self.file.close()
