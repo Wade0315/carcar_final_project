@@ -7,7 +7,10 @@ arduino/
 #YOLO image
 YOLO/image_test/
 YOLO/shuttle.v1i.yolov8/
+YOLO/shuttle.v2i.yolov8/
+YOLO/shuttle.v3i.yolov5pytorch/
 YOLO/stock/
+YOLO/runs/
 
 *.txt
 *.jpg

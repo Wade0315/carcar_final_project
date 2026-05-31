@@ -108,6 +108,9 @@ class Camera(CameraBase):
 
         net = ncnn.Net()
         net.opt.use_vulkan_compute = False
+        net.opt.num_threads = 4
+        net.opt.use_packing_layout = True
+        net.opt.use_fp16_storage = True
 
         logger.info("loading NCNN model param=%s bin=%s", param_path, bin_path)
         if net.load_param(str(param_path)) != 0:
