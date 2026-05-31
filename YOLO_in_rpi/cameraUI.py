@@ -24,7 +24,7 @@ class Camera(YOLOCamera):
         logger.info("debug candidates=%s find_ball=%s error=%s", len(candidates), find_ball, error)
         yolo_mask = self.build_yolo_mask(frame, candidates)
         self.visualize_frame(frame, floor_mask, candidates, target)
-        return frame, floor_mask, yolo_mask, find_ball, error
+        return frame, floor_mask, yolo_mask, find_ball, error, target
 
     def draw_target(self, frame, target):
         target_cx = target["target_cx"]
@@ -103,9 +103,10 @@ class Camera(YOLOCamera):
                 raw_frame = self.picam2.capture_array()
                 raw_frame = self.fix_orientation(raw_frame)
 
-                if at_frame % 3 == 0:
-                    processed_frame, _, _, find_ball, error = self.process_frame(raw_frame)
-                    yield find_ball, error
+                if at_frame % self.frame_interval == 0:
+                    processed_frame, _, _, find_ball, error, target = self.process_frame(raw_frame)
+                    logger.info("find_ball=%s error=%s area=%s",  find_ball, error, target["area"])
+                    yield find_ball, error, target
 
                 if processed_frame is not None:
                     cv2.imshow("Robot View", processed_frame)
@@ -129,8 +130,8 @@ class Camera(YOLOCamera):
         raw_frame = self.fix_orientation(raw_frame)
         original_frame = raw_frame.copy()
 
-        processed_frame, floor_mask, yolo_mask, find_ball, error = self.process_frame(raw_frame)
-        logger.info("find_ball=%s error=%s", find_ball, error)
+        processed_frame, floor_mask, yolo_mask, find_ball, error, target = self.process_frame(raw_frame)
+        logger.info("find_ball=%s error=%s area=%s",  find_ball, error, target["area"])
 
         if filename is None:
             timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -172,6 +173,6 @@ class Camera(YOLOCamera):
 if __name__ == "__main__":
     setup_logging()
     with Camera() as tracker:
-        #tracker.single_test()
-        for find_ball, error in tracker.streaming():
-            logger.info("find_ball=%s error=%s", find_ball, error)
+        tracker.single_test()
+        # for find_ball, error, target in tracker.streaming():
+        #     logger.info("find_ball=%s error=%s", find_ball, error)

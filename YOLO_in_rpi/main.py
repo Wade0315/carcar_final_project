@@ -13,7 +13,8 @@ class Status(Enum):
     IDLE = 4
 
 FOUND_TOLERANCE = 2         
-CLOSE_ERROR = 20           
+CLOSE_ERROR = 20
+CLOSE_AREA = 200           
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,7 @@ def main():
             mega.send(state.value)
             last_sent_state = state
 
-            for ball_detected, error in cam.streaming():
+            for ball_detected, error, target in cam.streaming():
                 if ball_detected:
                     found_count += 1
 

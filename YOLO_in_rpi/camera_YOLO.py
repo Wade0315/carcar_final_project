@@ -391,8 +391,8 @@ class Camera(CameraBase):
         return candidates
 
     def process_frame(self, frame):
-        _, _, _, find_ball, error = self.detect_frame(frame)
-        return find_ball, error
+        _, _, target, find_ball, error = self.detect_frame(frame)
+        return find_ball, error, target
 
     def streaming(self):
         logger.info("Starting YOLO tracking...")
@@ -404,8 +404,8 @@ class Camera(CameraBase):
                 raw_frame = self.fix_orientation(raw_frame)
 
                 if at_frame % self.frame_interval == 0:
-                    find_ball, error = self.process_frame(raw_frame)
-                    yield find_ball, error
+                    find_ball, error, target = self.process_frame(raw_frame)
+                    yield find_ball, error, target
 
                 at_frame += 1
 
