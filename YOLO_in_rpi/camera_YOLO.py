@@ -7,9 +7,11 @@ import cv2
 import numpy as np
 
 from camera_base import CameraBase
+from performance_logger import PerformanceLogger
 
 logger = logging.getLogger(__name__)
 DEFAULT_MODEL_PATH = "/home/waryt/YOLO/best_ncnn_model"
+FRAME_INTERVAL = 20
 
 
 def setup_logging():
@@ -46,7 +48,18 @@ class Camera(CameraBase):
 
         self.picam2 = Picamera2()
         self.closed = False
-        self.frame_interval = 2
+        self.frame_interval = max(1, int(os.getenv("YOLO_FRAME_INTERVAL", f"{FRAME_INTERVAL}")))
+        self.camera_fps = float(os.getenv("YOLO_CAMERA_FPS", "30"))
+        self.frame_budget_ms = self.frame_interval / self.camera_fps * 1000
+        default_perf_log = f"logs/yolo_performance_{time.strftime('%Y%m%d_%H%M%S')}.csv"
+        perf_log_path = os.getenv("YOLO_PERF_LOG", default_perf_log).strip()
+        summary_interval = int(os.getenv("YOLO_PERF_SUMMARY_INTERVAL", "30"))
+        self.performance_logger = (
+            PerformanceLogger(perf_log_path, summary_interval) if perf_log_path else None
+        )
+        self.last_performance = {}
+        self.last_ncnn_performance = {}
+        self.last_performance_recorded_at = None
 
         self.model_path = os.getenv("YOLO_MODEL", model_path)
         self.confidence = float(os.getenv("YOLO_CONF", confidence or 0.25))
@@ -60,7 +73,7 @@ class Camera(CameraBase):
 
         config = self.picam2.create_video_configuration(
             main={"format": "RGB888", "size": (self.width, self.height)},
-            controls={"FrameRate": 30},
+            controls={"FrameRate": self.camera_fps},
             buffer_count=3,
         )
         self.picam2.configure(config)
@@ -71,6 +84,12 @@ class Camera(CameraBase):
         self.lock_current_camera_controls()
         self.model = self.load_model(self.model_path)
         time.sleep(3)
+        logger.info(
+            "tracking config camera_fps=%.1f frame_interval=%s frame_budget_ms=%.1f",
+            self.camera_fps,
+            self.frame_interval,
+            self.frame_budget_ms,
+        )
 
     def load_model(self, model_path):
         try:
@@ -167,9 +186,13 @@ class Camera(CameraBase):
         self.last_candidate_count = 0
         self.last_max_confidence = None
 
+        started_at = time.perf_counter()
         input_image, scale, pad_x, pad_y = self.preprocess_for_ncnn(frame)
+        preprocessed_at = time.perf_counter()
         outputs = self.run_ncnn(input_image)
+        inferred_at = time.perf_counter()
         if not outputs:
+            self.update_detection_performance(started_at, preprocessed_at, inferred_at)
             logger.warning("NCNN returned no outputs")
             return []
 
@@ -177,6 +200,7 @@ class Camera(CameraBase):
         detections = self.decode_yolo_outputs(outputs)
         #detection: {"box": (x1, y1, x2, y2),"confidence": confidence,"class_id": class_id,}
         if not detections:
+            self.update_detection_performance(started_at, preprocessed_at, inferred_at)
             logger.info("no detections above confidence %.2f", self.confidence)
             return []
 
@@ -184,8 +208,56 @@ class Camera(CameraBase):
         self.last_detection_count = len(detections)
         candidates = self.build_candidates(detections, scale, pad_x, pad_y)
         self.last_candidate_count = len(candidates)
+        self.update_detection_performance(started_at, preprocessed_at, inferred_at)
         logger.info("detections=%s candidates=%s", len(detections), len(candidates))
         return candidates
+
+    def update_detection_performance(self, started_at, preprocessed_at, inferred_at):
+        finished_at = time.perf_counter()
+        self.last_performance = {
+            "preprocess_ms": (preprocessed_at - started_at) * 1000,
+            "inference_ms": (inferred_at - preprocessed_at) * 1000,
+            "postprocess_ms": (finished_at - inferred_at) * 1000,
+        }
+
+    def record_performance(self, frame_index, capture_ms, processing_ms, find_ball, error):
+        if self.performance_logger is None:
+            return
+
+        budget_overrun_ms = processing_ms - self.frame_budget_ms
+        recorded_at = time.perf_counter()
+        processed_gap_ms = None
+        effective_fps = None
+        if self.last_performance_recorded_at is not None:
+            processed_gap_ms = (recorded_at - self.last_performance_recorded_at) * 1000
+            effective_fps = 1000 / processed_gap_ms
+        self.last_performance_recorded_at = recorded_at
+
+        sample = {
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "frame_index": frame_index,
+            "frame_interval": self.frame_interval,
+            "frame_budget_ms": round(self.frame_budget_ms, 3),
+            "capture_ms": round(capture_ms, 3),
+            "preprocess_ms": round(self.last_performance.get("preprocess_ms", 0), 3),
+            "inference_ms": round(self.last_performance.get("inference_ms", 0), 3),
+            "ncnn_prepare_ms": round(self.last_ncnn_performance.get("ncnn_prepare_ms", 0), 3),
+            "ncnn_normalize_ms": round(self.last_ncnn_performance.get("ncnn_normalize_ms", 0), 3),
+            "ncnn_input_ms": round(self.last_ncnn_performance.get("ncnn_input_ms", 0), 3),
+            "ncnn_extract_ms": round(self.last_ncnn_performance.get("ncnn_extract_ms", 0), 3),
+            "ncnn_numpy_ms": round(self.last_ncnn_performance.get("ncnn_numpy_ms", 0), 3),
+            "postprocess_ms": round(self.last_performance.get("postprocess_ms", 0), 3),
+            "processing_ms": round(processing_ms, 3),
+            "processed_gap_ms": round(processed_gap_ms, 3) if processed_gap_ms is not None else None,
+            "effective_fps": round(effective_fps, 3) if effective_fps is not None else None,
+            "budget_overrun_ms": round(max(0, budget_overrun_ms), 3),
+            "over_budget": int(budget_overrun_ms > 0),
+            "detections": self.last_detection_count,
+            "candidates": self.last_candidate_count,
+            "find_ball": int(find_ball),
+            "error": error,
+        }
+        self.performance_logger.record(sample)
 
     def preprocess_for_ncnn(self, frame):
         source_h, source_w = frame.shape[:2]
@@ -202,6 +274,7 @@ class Camera(CameraBase):
         return padded, scale, pad_x, pad_y
 
     def run_ncnn(self, input_image):
+        started_at = time.perf_counter()
         input_name = self.model.input_names()[0]
         output_names = sorted(self.model.output_names())
         input_image = np.ascontiguousarray(input_image)
@@ -211,13 +284,21 @@ class Camera(CameraBase):
             self.imgsz,
             self.imgsz,
         )
+        prepared_at = time.perf_counter()
         input_mat.substract_mean_normalize([], [1 / 255.0, 1 / 255.0, 1 / 255.0])
+        normalized_at = time.perf_counter()
 
         with self.model.create_extractor() as extractor:
             extractor.input(input_name, input_mat)
+            input_at = time.perf_counter()
             outputs = []
+            extract_ms = 0
+            numpy_ms = 0
             for output_name in output_names:
+                extract_started_at = time.perf_counter()
                 result = extractor.extract(output_name)
+                extracted_at = time.perf_counter()
+                extract_ms += (extracted_at - extract_started_at) * 1000
                 if isinstance(result, tuple):
                     ret, output = result
                     if ret != 0:
@@ -226,6 +307,15 @@ class Camera(CameraBase):
                 else:
                     output = result
                 outputs.append(np.array(output))
+                numpy_ms += (time.perf_counter() - extracted_at) * 1000
+
+        self.last_ncnn_performance = {
+            "ncnn_prepare_ms": (prepared_at - started_at) * 1000,
+            "ncnn_normalize_ms": (normalized_at - prepared_at) * 1000,
+            "ncnn_input_ms": (input_at - normalized_at) * 1000,
+            "ncnn_extract_ms": extract_ms,
+            "ncnn_numpy_ms": numpy_ms,
+        }
         return outputs
 
     def decode_yolo_outputs(self, outputs):
@@ -237,62 +327,65 @@ class Camera(CameraBase):
                 continue
 
             logger.debug("NCNN prediction shape=%s", predictions.shape)
-            for prediction in predictions:
-                if len(prediction) < 5:
-                    continue
-
-                detection = self.decode_prediction(prediction)
-                if detection is None:
-                    continue
-
-                confidence = detection["confidence"]
-                if max_confidence is None or confidence > max_confidence:
-                    max_confidence = confidence
-                if confidence < self.confidence:
-                    continue
-
-                detections.append(detection)
+            output_detections, output_max_confidence = self.decode_predictions(predictions)
+            detections.extend(output_detections)
+            if output_max_confidence is not None:
+                if max_confidence is None or output_max_confidence > max_confidence:
+                    max_confidence = output_max_confidence
 
         if max_confidence is not None:
             self.last_max_confidence = max_confidence
             logger.info("max raw confidence=%.4f threshold=%.4f", max_confidence, self.confidence)
         return detections
 
-    def decode_prediction(self, prediction):
-        if self.is_postprocessed_detection(prediction):
-            x1, y1, x2, y2, confidence, class_id = [float(value) for value in prediction]
-            return {
-                "box": (x1, y1, x2, y2),
-                "confidence": confidence,
-                "class_id": int(class_id),
-            }
+    def decode_predictions(self, predictions):
+        if predictions.shape[1] == 6 and self.is_postprocessed_output(predictions):
+            return self.decode_postprocessed_predictions(predictions)
+        return self.decode_raw_predictions(predictions)
 
-        box = prediction[:4]
-        scores = prediction[4:]
-        class_id = int(np.argmax(scores))
-        confidence = float(scores[class_id])
-
-        cx, cy, w, h = [float(value) for value in box]
-        return {
-            "box": (cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2),
-            "confidence": confidence,
-            "class_id": class_id,
-        }
-
-    def is_postprocessed_detection(self, prediction):
-        if len(prediction) != 6:
-            return False
-
-        x1, y1, x2, y2, confidence, class_id = [float(value) for value in prediction]
-        if not (0 <= confidence <= 1):
-            return False
-        if abs(class_id - round(class_id)) > 1e-3:
-            return False
-        if x2 <= x1 or y2 <= y1:
-            return False
-
+    def is_postprocessed_output(self, predictions):
         class_count = max(len(self.class_names), 1)
-        return 0 <= int(round(class_id)) < class_count
+        class_ids = predictions[:, 5]
+        return bool(np.all(
+            (predictions[:, 4] >= 0)
+            & (predictions[:, 4] <= 1)
+            & (np.abs(class_ids - np.rint(class_ids)) <= 1e-3)
+            & (predictions[:, 2] > predictions[:, 0])
+            & (predictions[:, 3] > predictions[:, 1])
+            & (class_ids >= 0)
+            & (class_ids < class_count)
+        ))
+
+    def decode_postprocessed_predictions(self, predictions):
+        confidences = predictions[:, 4]
+        max_confidence = float(np.max(confidences)) if len(confidences) else None
+        selected = predictions[confidences >= self.confidence]
+        detections = [
+            {
+                "box": tuple(float(value) for value in prediction[:4]),
+                "confidence": float(prediction[4]),
+                "class_id": int(prediction[5]),
+            }
+            for prediction in selected
+        ]
+        return detections, max_confidence
+
+    def decode_raw_predictions(self, predictions):
+        scores = predictions[:, 4:]
+        class_ids = np.argmax(scores, axis=1)
+        confidences = scores[np.arange(len(scores)), class_ids]
+        max_confidence = float(np.max(confidences)) if len(confidences) else None
+        selected_indexes = np.flatnonzero(confidences >= self.confidence)
+
+        detections = []
+        for index in selected_indexes:
+            cx, cy, w, h = (float(value) for value in predictions[index, :4])
+            detections.append({
+                "box": (cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2),
+                "confidence": float(confidences[index]),
+                "class_id": int(class_ids[index]),
+            })
+        return detections, max_confidence
 
     def normalize_output_shape(self, output):
         output = np.asarray(output)
@@ -400,11 +493,16 @@ class Camera(CameraBase):
 
         try:
             while True:
+                capture_started_at = time.perf_counter()
                 raw_frame = self.picam2.capture_array()
                 raw_frame = self.fix_orientation(raw_frame)
+                capture_ms = (time.perf_counter() - capture_started_at) * 1000
 
                 if at_frame % self.frame_interval == 0:
+                    processing_started_at = time.perf_counter()
                     find_ball, error, target = self.process_frame(raw_frame)
+                    processing_ms = (time.perf_counter() - processing_started_at) * 1000
+                    self.record_performance(at_frame, capture_ms, processing_ms, find_ball, error)
                     yield find_ball, error, target
 
                 at_frame += 1
@@ -419,6 +517,8 @@ class Camera(CameraBase):
         if self.closed:
             return
         self.picam2.stop()
+        if self.performance_logger is not None:
+            self.performance_logger.close()
         self.closed = True
         logger.info("Camera closed.")
 

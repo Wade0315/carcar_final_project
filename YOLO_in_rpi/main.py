@@ -15,6 +15,9 @@ class Status(Enum):
 FOUND_TOLERANCE = 2         
 CLOSE_TRACK = 20
 CLOSE_AREA = 30000           
+WARMUP_SECONDS = float(os.getenv("YOLO_WARMUP_SECONDS", "5"))
+WARMUP_STABLE_FRAMES = int(os.getenv("YOLO_WARMUP_STABLE_FRAMES", "3"))
+MAX_INFERENCE_MS = float(os.getenv("YOLO_MAX_INFERENCE_MS", "800"))
 
 logger = logging.getLogger(__name__)
 
@@ -44,9 +47,41 @@ def main():
             mega = arduino.Arduino()
             mega.send(state.value)
             last_sent_state = state
+            warmup_ends_at = time.monotonic() + WARMUP_SECONDS
+            stable_inference_count = 0
+            controls_enabled = False
+            logger.info(
+                "warming up YOLO for at least %.1f seconds; waiting for %s consecutive "
+                "inferences <= %.1f ms before enabling motors",
+                WARMUP_SECONDS,
+                WARMUP_STABLE_FRAMES,
+                MAX_INFERENCE_MS,
+            )
 
             for ball_detected, error, target in cam.streaming():
-                mega.print_all(mega.receive())
+                mega.receive()
+                inference_ms = cam.last_performance.get("inference_ms", float("inf"))
+                if inference_ms <= MAX_INFERENCE_MS:
+                    stable_inference_count += 1
+                else:
+                    stable_inference_count = 0
+                    logger.warning("slow inference %.1f ms > %.1f ms; motors remain stopped",inference_ms,MAX_INFERENCE_MS,)
+
+                inference_ready = stable_inference_count >= WARMUP_STABLE_FRAMES
+                controls_ready = time.monotonic() >= warmup_ends_at and inference_ready
+                if not controls_ready:
+                    found_count = 0
+                    state = Status.NOT_FOUND
+                    if last_sent_state != state:
+                        mega.send(state.value)
+                        last_sent_state = state
+                    controls_enabled = False
+                    continue
+
+                if not controls_enabled:
+                    logger.info("YOLO inference stabilized; motors enabled")
+                    controls_enabled = True
+
                 if ball_detected:
                     found_count += 1
 

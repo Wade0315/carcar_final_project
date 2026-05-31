@@ -100,12 +100,18 @@ class Camera(YOLOCamera):
 
         try:
             while True:
+                capture_started_at = time.perf_counter()
                 raw_frame = self.picam2.capture_array()
                 raw_frame = self.fix_orientation(raw_frame)
+                capture_ms = (time.perf_counter() - capture_started_at) * 1000
 
                 if at_frame % self.frame_interval == 0:
+                    processing_started_at = time.perf_counter()
                     processed_frame, _, _, find_ball, error, target = self.process_frame(raw_frame)
-                    logger.info("find_ball=%s error=%s area=%s",  find_ball, error, target["area"])
+                    processing_ms = (time.perf_counter() - processing_started_at) * 1000
+                    self.record_performance(at_frame, capture_ms, processing_ms, find_ball, error)
+                    area = target["area"] if target is not None else None
+                    logger.info("find_ball=%s error=%s area=%s", find_ball, error, area)
                     yield find_ball, error, target
 
                 if processed_frame is not None:
