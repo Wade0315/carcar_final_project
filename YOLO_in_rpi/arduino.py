@@ -65,7 +65,7 @@ class Arduino:
             msg += "\n"
 
         self.ser.write(msg.encode())
-        logger.debug("sent: %s", msg.strip())
+        logger.info("send to [Arduino]: %s", msg.strip())
 
     def receive(self, wait_time=0.5):
         if self.ser is None:
@@ -80,11 +80,12 @@ class Arduino:
                 if msg:
                     messages.append(msg)
             time.sleep(0.005)
-            return messages
+        return messages
 
     def print_all(self, messages):
-        for msg in messages:
-            logging.debug(msg)
+        if messages:
+            for msg in messages:
+                logger.info("from [Arduino]: %s", msg)
         
     def close(self):
         if self.ser is not None:

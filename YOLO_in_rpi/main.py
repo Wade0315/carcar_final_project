@@ -6,15 +6,15 @@ import arduino
 import camera_YOLO as camera
 
 class Status(Enum):
-    ERROR = 0
+    TRACK = 0
     NOT_FOUND = 1
     CLOSE_ENOUGH = 2
     OUT_OF_BOUND = 3
     IDLE = 4
 
 FOUND_TOLERANCE = 2         
-CLOSE_ERROR = 20
-CLOSE_AREA = 200           
+CLOSE_TRACK = 20
+CLOSE_AREA = 30000           
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +30,8 @@ def setup_logging():
     )
     logger.info("logging initialized level=%s", logging.getLevelName(level))
 
+def has_target(target):
+    return True if target is not None else False
 
 def main():
 
@@ -44,6 +46,7 @@ def main():
             last_sent_state = state
 
             for ball_detected, error, target in cam.streaming():
+                mega.print_all(mega.receive())
                 if ball_detected:
                     found_count += 1
 
@@ -52,12 +55,15 @@ def main():
 
                     if error is None:
                         state = Status.IDLE
-                    elif abs(error) <= CLOSE_ERROR:
-                        state = Status.CLOSE_ENOUGH
+                    elif abs(error) <= CLOSE_TRACK:
+                        if has_target(target) and target["area"] >= CLOSE_AREA:
+                            state = Status.CLOSE_ENOUGH
+                        else:
+                            state = Status.TRACK
                     else:
-                        state = Status.ERROR
+                        state = Status.TRACK
 
-                    if state == Status.ERROR:
+                    if state == Status.TRACK:
                         mega.send(f"{state.value} {error}")
                         last_sent_state = state
                         logger.info("%s error=%s", state.name, error)
