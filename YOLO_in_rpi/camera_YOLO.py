@@ -10,8 +10,10 @@ from camera_base import CameraBase
 from performance_logger import PerformanceLogger
 
 logger = logging.getLogger(__name__)
-DEFAULT_MODEL_PATH = "/home/waryt/YOLO/best_ncnn_model"
+DEFAULT_MODEL_PATH = "/home/waryt/YOLO/best_ncnn_model_v5nu"
 FRAME_INTERVAL = 20
+DEFAULT_IMAGE_SIZE = 256
+DEFAULT_EXPOSURE_TIME_US = 5000
 
 
 def setup_logging():
@@ -34,8 +36,9 @@ class Camera(CameraBase):
         flip_code=-1,
         model_path=DEFAULT_MODEL_PATH,
         confidence=None,
-        imgsz=None,
+        imgsz=DEFAULT_IMAGE_SIZE,
         target_class=None,
+        exposure_time_us=DEFAULT_EXPOSURE_TIME_US,
     ):
         super().__init__(width, height, flip_code)
 
@@ -50,6 +53,7 @@ class Camera(CameraBase):
         self.closed = False
         self.frame_interval = max(1, int(os.getenv("YOLO_FRAME_INTERVAL", f"{FRAME_INTERVAL}")))
         self.camera_fps = float(os.getenv("YOLO_CAMERA_FPS", "30"))
+        self.exposure_time_us = int(os.getenv("YOLO_EXPOSURE_TIME_US", exposure_time_us))
         self.frame_budget_ms = self.frame_interval / self.camera_fps * 1000
         default_perf_log = f"logs/yolo_performance_{time.strftime('%Y%m%d_%H%M%S')}.csv"
         perf_log_path = os.getenv("YOLO_PERF_LOG", default_perf_log).strip()
@@ -85,10 +89,12 @@ class Camera(CameraBase):
         self.model = self.load_model(self.model_path)
         time.sleep(3)
         logger.info(
-            "tracking config camera_fps=%.1f frame_interval=%s frame_budget_ms=%.1f",
+            "tracking config camera_fps=%.1f frame_interval=%s frame_budget_ms=%.1f imgsz=%s exposure_time_us=%s",
             self.camera_fps,
             self.frame_interval,
             self.frame_budget_ms,
+            self.imgsz,
+            self.exposure_time_us,
         )
 
     def load_model(self, model_path):
@@ -155,16 +161,15 @@ class Camera(CameraBase):
 
     def lock_current_camera_controls(self):
         metadata = self.picam2.capture_metadata()
-        exposure_time = metadata.get("ExposureTime")
+        measured_exposure_time = metadata.get("ExposureTime")
         analogue_gain = metadata.get("AnalogueGain")
         colour_gains = metadata.get("ColourGains")
 
         controls = {
             "AeEnable": False,
             "AwbEnable": False,
+            "ExposureTime": self.exposure_time_us,
         }
-        if exposure_time is not None:
-            controls["ExposureTime"] = exposure_time
         if analogue_gain is not None:
             controls["AnalogueGain"] = analogue_gain
         if colour_gains is not None:
@@ -172,8 +177,9 @@ class Camera(CameraBase):
 
         self.picam2.set_controls(controls)
         logger.info(
-            "lock camera ExposureTime=%s AnalogueGain=%s ColourGains=%s",
-            exposure_time,
+            "lock camera ExposureTime=%s us (measured=%s us) AnalogueGain=%s ColourGains=%s",
+            self.exposure_time_us,
+            measured_exposure_time,
             analogue_gain,
             colour_gains,
         )
