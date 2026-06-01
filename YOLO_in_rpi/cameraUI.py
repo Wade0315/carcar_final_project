@@ -23,7 +23,7 @@ class Camera(YOLOCamera):
         floor_mask, candidates, target, find_ball, error = self.detect_frame(frame)
         logger.info("debug candidates=%s find_ball=%s error=%s", len(candidates), find_ball, error)
         yolo_mask = self.build_yolo_mask(frame, candidates)
-        self.visualize_frame(frame, floor_mask, candidates, target)
+        self.visualize_frame(frame, floor_mask, candidates, target, error)
         return frame, floor_mask, yolo_mask, find_ball, error, target
 
     def draw_target(self, frame, target):
@@ -41,12 +41,12 @@ class Camera(YOLOCamera):
             2,
         )
 
-    def visualize_frame(self, frame, floor_mask, candidates, target):
+    def visualize_frame(self, frame, floor_mask, candidates, target, error):
         self.draw_center_line(frame)
         self.draw_candidates(frame, candidates)
         if target is not None:
             self.draw_target(frame, target)
-        self.draw_error_text(frame, target)
+        self.draw_error_text(frame, error)
 
     def draw_center_line(self, frame):
         cv2.line(frame, (self.width // 2, 0), (self.width // 2, self.height), (0, 255, 255), 1)
@@ -81,15 +81,14 @@ class Camera(YOLOCamera):
 
         cv2.putText(frame, label, (label_x, label_y), font, scale, color, thickness)
 
-    def draw_error_text(self, frame, target):
-        error = target["error"] if target is not None else None
+    def draw_error_text(self, frame, error):
         cv2.putText(
             frame,
             f"error={error}",
             (8, 18),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.5,
-            (0, 255, 0) if target is not None else (0, 255, 255),
+            (0, 255, 0) if error is not None else (0, 255, 255),
             1,
         )
 

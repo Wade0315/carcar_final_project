@@ -94,13 +94,21 @@ class CameraBase:
 
             if self.target_x is not None and distance > self.max_tracking_distance:
                 self.lost_count += 1
-                if self.lost_count <= self.max_lost_frames:
+                if self.last_error is not None and self.lost_count <= self.max_lost_frames:
+                    logger.debug(
+                        "target jumped %.1f px; reuse last_error=%s lost_count=%s/%s",
+                        distance,
+                        self.last_error,
+                        self.lost_count,
+                        self.max_lost_frames,
+                    )
                     return True, self.last_error, None
 
-                self.target_x = None
-                self.target_y = None
-                self.last_error = None
-                return False, None, None
+                logger.debug(
+                    "target jumped %.1f px; reacquire candidate after lost_count=%s",
+                    distance,
+                    self.lost_count,
+                )
 
             self.target_x = target["target_cx"]
             self.target_y = target["target_cy"]
@@ -112,6 +120,12 @@ class CameraBase:
 
         self.lost_count += 1
         if self.last_error is not None and self.lost_count <= self.max_lost_frames:
+            logger.debug(
+                "target missing; reuse last_error=%s lost_count=%s/%s",
+                self.last_error,
+                self.lost_count,
+                self.max_lost_frames,
+            )
             return True, self.last_error, None
 
         self.target_x = None

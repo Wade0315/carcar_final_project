@@ -165,7 +165,7 @@ class Camera(CameraBase):
         metadata = self.picam2.capture_metadata()
         measured_exposure_time = metadata.get("ExposureTime")
         measured_analogue_gain = metadata.get("AnalogueGain")
-        analogue_gain = measured_analogue_gain + 0.5 if measured_analogue_gain is not None else None
+        analogue_gain = measured_analogue_gain + 1 if measured_analogue_gain is not None else None
         colour_gains = metadata.get("ColourGains")
 
         controls = {

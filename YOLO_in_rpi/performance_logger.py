@@ -50,13 +50,13 @@ class PerformanceLogger:
 
     def record(self, sample):
         self.writer.writerow({field: sample.get(field) for field in PERF_LOG_FIELDS})
+        self.file.flush()
         self.samples.append(sample)
         self.total_samples += 1
         if sample["over_budget"]:
             self.total_over_budget += 1
 
         if self.total_samples % self.summary_interval == 0:
-            self.file.flush()
             self.log_summary()
 
     def log_summary(self):
