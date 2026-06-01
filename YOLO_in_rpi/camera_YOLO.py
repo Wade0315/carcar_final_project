@@ -11,7 +11,7 @@ from performance_logger import PerformanceLogger
 
 logger = logging.getLogger(__name__)
 DEFAULT_MODEL_PATH = "/home/waryt/YOLO/best_ncnn_model_v5nu"
-FRAME_INTERVAL = 20
+FRAME_INTERVAL = 10
 DEFAULT_IMAGE_SIZE = 256
 DEFAULT_EXPOSURE_TIME_US = 5000
 

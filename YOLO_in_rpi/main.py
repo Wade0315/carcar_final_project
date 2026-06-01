@@ -16,8 +16,8 @@ class Status(Enum):
 FOUND_TOLERANCE = 2         
 CLOSE_TRACK = 20
 CLOSE_AREA = 25000           
-WARMUP_SECONDS = float(os.getenv("YOLO_WARMUP_SECONDS", "5"))
-WARMUP_STABLE_FRAMES = int(os.getenv("YOLO_WARMUP_STABLE_FRAMES", "3"))
+WARMUP_SECONDS = float(os.getenv("YOLO_WARMUP_SECONDS", "2"))
+WARMUP_STABLE_FRAMES = int(os.getenv("YOLO_WARMUP_STABLE_FRAMES", "5"))
 MAX_INFERENCE_MS = float(os.getenv("YOLO_MAX_INFERENCE_MS", "800"))
 
 logger = logging.getLogger(__name__)
