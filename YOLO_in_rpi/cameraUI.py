@@ -106,9 +106,15 @@ class Camera(YOLOCamera):
 
                 if at_frame % self.frame_interval == 0:
                     processing_started_at = time.perf_counter()
-                    processed_frame, _, _, find_ball, error, target = self.process_frame(raw_frame)
+                    floor_mask, candidates, target, find_ball, error = self.detect_frame(raw_frame)
                     processing_ms = (time.perf_counter() - processing_started_at) * 1000
                     self.record_performance(at_frame, capture_ms, processing_ms, find_ball, error)
+                    logger.info("debug candidates=%s find_ball=%s error=%s", len(candidates), find_ball, error)
+                    try:
+                        self.visualize_frame(raw_frame, floor_mask, candidates, target, error)
+                    except Exception:
+                        logger.exception("failed to visualize frame")
+                    processed_frame = raw_frame
                     area = target["area"] if target is not None else None
                     logger.info("find_ball=%s error=%s area=%s", find_ball, error, area)
                     yield find_ball, error, target
@@ -131,12 +137,18 @@ class Camera(YOLOCamera):
         logger.info("capturing photo...")
         os.makedirs(output_dir, exist_ok=True)
 
+        capture_started_at = time.perf_counter()
         raw_frame = self.picam2.capture_array()
         raw_frame = self.fix_orientation(raw_frame)
+        capture_ms = (time.perf_counter() - capture_started_at) * 1000
         original_frame = raw_frame.copy()
 
+        processing_started_at = time.perf_counter()
         processed_frame, floor_mask, yolo_mask, find_ball, error, target = self.process_frame(raw_frame)
-        logger.info("find_ball=%s error=%s area=%s",  find_ball, error, target["area"])
+        processing_ms = (time.perf_counter() - processing_started_at) * 1000
+        self.record_performance(0, capture_ms, processing_ms, find_ball, error)
+        area = target["area"] if target is not None else None
+        logger.info("find_ball=%s error=%s area=%s", find_ball, error, area)
 
         if filename is None:
             timestamp = time.strftime("%Y%m%d_%H%M%S")

@@ -55,8 +55,12 @@ class Camera(CameraBase):
         self.camera_fps = float(os.getenv("YOLO_CAMERA_FPS", "30"))
         self.exposure_time_us = int(os.getenv("YOLO_EXPOSURE_TIME_US", exposure_time_us))
         self.frame_budget_ms = self.frame_interval / self.camera_fps * 1000
-        default_perf_log = f"logs/yolo_performance_{time.strftime('%Y%m%d_%H%M%S')}.csv"
-        perf_log_path = os.getenv("YOLO_PERF_LOG", default_perf_log).strip()
+        default_perf_log = (
+            Path(__file__).resolve().parent
+            / "logs"
+            / f"yolo_performance_{time.strftime('%Y%m%d_%H%M%S')}.csv"
+        )
+        perf_log_path = os.getenv("YOLO_PERF_LOG", str(default_perf_log)).strip()
         summary_interval = int(os.getenv("YOLO_PERF_SUMMARY_INTERVAL", "30"))
         self.performance_logger = (
             PerformanceLogger(perf_log_path, summary_interval) if perf_log_path else None
