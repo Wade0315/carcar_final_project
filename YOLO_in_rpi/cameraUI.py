@@ -94,35 +94,29 @@ class Camera(YOLOCamera):
 
     def streaming(self):
         logger.info("Starting YOLO debug view... Press 'q' to quit.")
-        at_frame = 0
+        last_frame_index = None
         processed_frame = None
 
         try:
             while True:
-                capture_started_at = time.perf_counter()
-                raw_frame = self.picam2.capture_array()
-                raw_frame = self.fix_orientation(raw_frame)
-                capture_ms = (time.perf_counter() - capture_started_at) * 1000
-
-                if at_frame % self.frame_interval == 0:
-                    processing_started_at = time.perf_counter()
-                    floor_mask, candidates, target, find_ball, error = self.detect_frame(raw_frame)
-                    processing_ms = (time.perf_counter() - processing_started_at) * 1000
-                    self.record_performance(at_frame, capture_ms, processing_ms, find_ball, error)
-                    logger.info("debug candidates=%s find_ball=%s error=%s", len(candidates), find_ball, error)
-                    try:
-                        self.visualize_frame(raw_frame, floor_mask, candidates, target, error)
-                    except Exception:
-                        logger.exception("failed to visualize frame")
-                    processed_frame = raw_frame
-                    area = target["area"] if target is not None else None
-                    logger.info("find_ball=%s error=%s area=%s", find_ball, error, area)
-                    yield find_ball, error, target
+                raw_frame, capture_ms, frame_index = self.get_latest_frame(last_frame_index)
+                last_frame_index = frame_index
+                processing_started_at = time.perf_counter()
+                floor_mask, candidates, target, find_ball, error = self.detect_frame(raw_frame)
+                processing_ms = (time.perf_counter() - processing_started_at) * 1000
+                self.record_performance(frame_index, capture_ms, processing_ms, find_ball, error)
+                logger.info("debug candidates=%s find_ball=%s error=%s", len(candidates), find_ball, error)
+                try:
+                    self.visualize_frame(raw_frame, floor_mask, candidates, target, error)
+                except Exception:
+                    logger.exception("failed to visualize frame")
+                processed_frame = raw_frame
+                area = target["area"] if target is not None else None
+                logger.info("find_ball=%s error=%s area=%s", find_ball, error, area)
+                yield find_ball, error, target
 
                 if processed_frame is not None:
                     cv2.imshow("Robot View", processed_frame)
-
-                at_frame += 1
 
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     break
@@ -137,10 +131,7 @@ class Camera(YOLOCamera):
         logger.info("capturing photo...")
         os.makedirs(output_dir, exist_ok=True)
 
-        capture_started_at = time.perf_counter()
-        raw_frame = self.picam2.capture_array()
-        raw_frame = self.fix_orientation(raw_frame)
-        capture_ms = (time.perf_counter() - capture_started_at) * 1000
+        raw_frame, capture_ms, _ = self.get_latest_frame()
         original_frame = raw_frame.copy()
 
         processing_started_at = time.perf_counter()
@@ -163,10 +154,11 @@ class Camera(YOLOCamera):
         logger.info("capturing images to %s. Press 't' to save, 'q' to quit.", output_dir)
 
         count = 0
+        last_frame_index = None
         try:
             while max_images is None or count < max_images:
-                frame = self.picam2.capture_array()
-                frame = self.fix_orientation(frame)
+                frame, _, frame_index = self.get_latest_frame(last_frame_index)
+                last_frame_index = frame_index
                 cv2.imshow("Capture View", frame)
 
                 key = cv2.waitKey(1) & 0xFF

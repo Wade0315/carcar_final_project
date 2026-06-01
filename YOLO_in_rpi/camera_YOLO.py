@@ -1,6 +1,7 @@
 import logging
 import os
 from pathlib import Path
+import threading
 import time
 
 import cv2
@@ -11,7 +12,7 @@ from performance_logger import PerformanceLogger
 
 logger = logging.getLogger(__name__)
 DEFAULT_MODEL_PATH = "/home/waryt/YOLO/best_ncnn_model_v5nu"
-FRAME_INTERVAL = 10
+FRAME_INTERVAL = 1
 DEFAULT_IMAGE_SIZE = 256
 DEFAULT_EXPOSURE_TIME_US = 5000
 
@@ -51,10 +52,18 @@ class Camera(CameraBase):
 
         self.picam2 = Picamera2()
         self.closed = False
-        self.frame_interval = max(1, int(os.getenv("YOLO_FRAME_INTERVAL", f"{FRAME_INTERVAL}")))
+        self.frame_interval = FRAME_INTERVAL
         self.camera_fps = float(os.getenv("YOLO_CAMERA_FPS", "30"))
         self.exposure_time_us = int(os.getenv("YOLO_EXPOSURE_TIME_US", exposure_time_us))
         self.frame_budget_ms = self.frame_interval / self.camera_fps * 1000
+        self.latest_frame = None
+        self.latest_capture_ms = None
+        self.latest_frame_index = -1
+        self.latest_frame_lock = threading.Lock()
+        self.latest_frame_ready = threading.Event()
+        self.capture_stop = threading.Event()
+        self.capture_error = None
+        self.capture_thread = None
         default_perf_log = (
             Path(__file__).resolve().parent
             / "logs"
@@ -91,6 +100,7 @@ class Camera(CameraBase):
         time.sleep(3)
         self.lock_current_camera_controls()
         self.model = self.load_model(self.model_path)
+        self.start_frame_capture()
         time.sleep(3)
         logger.info(
             "tracking config camera_fps=%.1f frame_interval=%s frame_budget_ms=%.1f imgsz=%s exposure_time_us=%s",
@@ -100,6 +110,51 @@ class Camera(CameraBase):
             self.imgsz,
             self.exposure_time_us,
         )
+
+    def start_frame_capture(self):
+        self.capture_thread = threading.Thread(
+            target=self.capture_latest_frames,
+            name="camera-capture",
+            daemon=True,
+        )
+        self.capture_thread.start()
+        logger.info("camera capture thread started")
+
+    def capture_latest_frames(self):
+        frame_index = 0
+        try:
+            while not self.capture_stop.is_set():
+                capture_started_at = time.perf_counter()
+                frame = self.picam2.capture_array()
+                frame = self.fix_orientation(frame)
+                capture_ms = (time.perf_counter() - capture_started_at) * 1000
+                with self.latest_frame_lock:
+                    self.latest_frame = frame
+                    self.latest_capture_ms = capture_ms
+                    self.latest_frame_index = frame_index
+                self.latest_frame_ready.set()
+                frame_index += 1
+        except Exception as exc:
+            self.capture_error = exc
+            self.latest_frame_ready.set()
+            if not self.capture_stop.is_set():
+                logger.exception("camera capture thread failed")
+
+    def get_latest_frame(self, after_frame_index=None, timeout=2):
+        while True:
+            if self.capture_error is not None:
+                raise RuntimeError("camera capture thread failed") from self.capture_error
+            with self.latest_frame_lock:
+                frame = self.latest_frame
+                capture_ms = self.latest_capture_ms
+                frame_index = self.latest_frame_index
+                if frame is not None and (after_frame_index is None or frame_index > after_frame_index):
+                    return frame, capture_ms, frame_index
+                self.latest_frame_ready.clear()
+            if self.capture_stop.is_set():
+                raise RuntimeError("camera capture thread stopped")
+            if not self.latest_frame_ready.wait(timeout):
+                raise TimeoutError("timed out waiting for camera frame")
 
     def load_model(self, model_path):
         try:
@@ -506,23 +561,17 @@ class Camera(CameraBase):
 
     def streaming(self):
         logger.info("Starting YOLO tracking...")
-        at_frame = 0
+        last_frame_index = None
 
         try:
             while True:
-                capture_started_at = time.perf_counter()
-                raw_frame = self.picam2.capture_array()
-                raw_frame = self.fix_orientation(raw_frame)
-                capture_ms = (time.perf_counter() - capture_started_at) * 1000
-
-                if at_frame % self.frame_interval == 0:
-                    processing_started_at = time.perf_counter()
-                    find_ball, error, target = self.process_frame(raw_frame)
-                    processing_ms = (time.perf_counter() - processing_started_at) * 1000
-                    self.record_performance(at_frame, capture_ms, processing_ms, find_ball, error)
-                    yield find_ball, error, target
-
-                at_frame += 1
+                raw_frame, capture_ms, frame_index = self.get_latest_frame(last_frame_index)
+                last_frame_index = frame_index
+                processing_started_at = time.perf_counter()
+                find_ball, error, target = self.process_frame(raw_frame)
+                processing_ms = (time.perf_counter() - processing_started_at) * 1000
+                self.record_performance(frame_index, capture_ms, processing_ms, find_ball, error)
+                yield find_ball, error, target
 
         except KeyboardInterrupt:
             logger.info("Stopped by user")
@@ -533,7 +582,12 @@ class Camera(CameraBase):
     def close(self):
         if self.closed:
             return
+        self.capture_stop.set()
+        if self.capture_thread is not None:
+            self.capture_thread.join(timeout=1)
         self.picam2.stop()
+        if self.capture_thread is not None:
+            self.capture_thread.join(timeout=1)
         if self.performance_logger is not None:
             self.performance_logger.close()
         self.closed = True
