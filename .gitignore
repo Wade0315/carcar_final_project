@@ -11,6 +11,7 @@ YOLO/shuttle.v2i.yolov8/
 YOLO/shuttle.v3i.yolov5pytorch/
 YOLO/stock/
 YOLO/runs/
+YOLO/runs-v5n/
 
 *.txt
 *.jpg

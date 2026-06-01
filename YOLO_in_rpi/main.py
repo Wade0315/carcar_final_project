@@ -3,7 +3,8 @@ import logging
 import time
 from enum import Enum
 import arduino
-import camera_YOLO as camera
+#import camera_YOLO as camera
+import cameraUI as camera
 
 class Status(Enum):
     TRACK = 0
@@ -14,9 +15,9 @@ class Status(Enum):
 
 FOUND_TOLERANCE = 2         
 CLOSE_TRACK = 20
-CLOSE_AREA = 30000           
-WARMUP_SECONDS = float(os.getenv("YOLO_WARMUP_SECONDS", "5"))
-WARMUP_STABLE_FRAMES = int(os.getenv("YOLO_WARMUP_STABLE_FRAMES", "3"))
+CLOSE_AREA = 25000           
+WARMUP_SECONDS = float(os.getenv("YOLO_WARMUP_SECONDS", "2"))
+WARMUP_STABLE_FRAMES = int(os.getenv("YOLO_WARMUP_STABLE_FRAMES", "5"))
 MAX_INFERENCE_MS = float(os.getenv("YOLO_MAX_INFERENCE_MS", "800"))
 
 logger = logging.getLogger(__name__)
@@ -45,7 +46,7 @@ def main():
         with camera.Camera() as cam:
             state = Status.NOT_FOUND
             mega = arduino.Arduino()
-            mega.send(state.value)
+            #mega.send(state.value)
             last_sent_state = state
             warmup_ends_at = time.monotonic() + WARMUP_SECONDS
             stable_inference_count = 0
@@ -93,15 +94,23 @@ def main():
                     elif abs(error) <= CLOSE_TRACK:
                         if has_target(target) and target["area"] >= CLOSE_AREA:
                             state = Status.CLOSE_ENOUGH
+                            logger.info("%s error=%s area=%s", state.name, error, target["area"])
                         else:
                             state = Status.TRACK
+                            if not has_target(target):
+                                logger.info("%s error=%s", state.name, error)
+                            else:
+                                logger.info("%s error=%s area=%s", state.name, error,target["area"])
                     else:
                         state = Status.TRACK
 
                     if state == Status.TRACK:
                         mega.send(f"{state.value} {error}")
                         last_sent_state = state
-                        logger.info("%s error=%s", state.name, error)
+                        if not has_target(target):
+                            logger.info("%s error=%s", state.name, error)
+                        else:
+                            logger.info("%s error=%s area=%s", state.name, error,target["area"])
                     else:
                         mega.send(state.value)
                         if last_sent_state != state:

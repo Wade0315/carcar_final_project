@@ -33,7 +33,7 @@ PERF_LOG_FIELDS = [
 
 class PerformanceLogger:
     def __init__(self, path, summary_interval=30):
-        self.path = Path(path).expanduser()
+        self.path = Path(path).expanduser().resolve()
         self.summary_interval = max(1, summary_interval)
         self.samples = deque(maxlen=self.summary_interval)
         self.total_samples = 0
@@ -50,13 +50,15 @@ class PerformanceLogger:
 
     def record(self, sample):
         self.writer.writerow({field: sample.get(field) for field in PERF_LOG_FIELDS})
+        self.file.flush()
         self.samples.append(sample)
         self.total_samples += 1
+        if self.total_samples == 1:
+            logger.info("performance first sample written path=%s", self.path)
         if sample["over_budget"]:
             self.total_over_budget += 1
 
         if self.total_samples % self.summary_interval == 0:
-            self.file.flush()
             self.log_summary()
 
     def log_summary(self):
@@ -89,3 +91,4 @@ class PerformanceLogger:
         self.log_summary()
         self.file.flush()
         self.file.close()
+        logger.info("performance log closed path=%s samples=%s", self.path, self.total_samples)
