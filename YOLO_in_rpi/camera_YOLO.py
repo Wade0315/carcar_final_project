@@ -160,9 +160,12 @@ class Camera(CameraBase):
         return {}
 
     def lock_current_camera_controls(self):
+        for _ in range(10):
+            self.picam2.capture_array()
         metadata = self.picam2.capture_metadata()
         measured_exposure_time = metadata.get("ExposureTime")
-        analogue_gain = metadata.get("AnalogueGain")
+        measured_analogue_gain = metadata.get("AnalogueGain")
+        analogue_gain = measured_analogue_gain + 0.5 if measured_analogue_gain is not None else None
         colour_gains = metadata.get("ColourGains")
 
         controls = {
@@ -177,10 +180,11 @@ class Camera(CameraBase):
 
         self.picam2.set_controls(controls)
         logger.info(
-            "lock camera ExposureTime=%s us (measured=%s us) AnalogueGain=%s ColourGains=%s",
+            "lock camera ExposureTime=%s us (measured=%s us) AnalogueGain=%s (measured=%s) ColourGains=%s",
             self.exposure_time_us,
             measured_exposure_time,
             analogue_gain,
+            measured_analogue_gain,
             colour_gains,
         )
 
