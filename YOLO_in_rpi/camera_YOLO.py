@@ -79,10 +79,10 @@ class Camera(CameraBase):
         self.start_frame_capture()
         time.sleep(2)
         logger.info(
-            "tracking config camera_fps=%.1f frame_interval=%s frame_budget_ms=%.1f imgsz=%s exposure_time_us=%s",
+            "tracking config camera_fps=%.1f frame_interval=%s camera_frame_period_ms=%.1f imgsz=%s exposure_time_us=%s",
             self.camera_fps,
             self.frame_interval,
-            self.frame_budget_ms,
+            self.camera_frame_period_ms,
             self.imgsz,
             self.exposure_time_us,
         )
@@ -200,7 +200,6 @@ class Camera(CameraBase):
         if self.performance_logger is None:
             return
 
-        budget_overrun_ms = processing_ms - self.frame_budget_ms
         recorded_at = time.perf_counter()
         processed_gap_ms = None
         effective_fps = None
@@ -213,7 +212,7 @@ class Camera(CameraBase):
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "frame_index": frame_index,
             "frame_interval": self.frame_interval,
-            "frame_budget_ms": round(self.frame_budget_ms, 3),
+            "camera_frame_period_ms": round(self.camera_frame_period_ms, 3),
             "capture_ms": round(capture_ms, 3),
             "preprocess_ms": round(self.last_performance.get("preprocess_ms", 0), 3),
             "inference_ms": round(self.last_performance.get("inference_ms", 0), 3),
@@ -226,8 +225,6 @@ class Camera(CameraBase):
             "processing_ms": round(processing_ms, 3),
             "processed_gap_ms": round(processed_gap_ms, 3) if processed_gap_ms is not None else None,
             "effective_fps": round(effective_fps, 3) if effective_fps is not None else None,
-            "budget_overrun_ms": round(max(0, budget_overrun_ms), 3),
-            "over_budget": int(budget_overrun_ms > 0),
             "detections": self.last_detection_count,
             "candidates": self.last_candidate_count,
             "find_ball": int(find_ball),

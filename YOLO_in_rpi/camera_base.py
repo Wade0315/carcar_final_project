@@ -24,7 +24,7 @@ class CameraBase:
         self.frame_interval = frame_interval
         self.camera_fps = camera_fps
         self.exposure_time_us = exposure_time_us
-        self.frame_budget_ms = self.frame_interval / self.camera_fps * 1000
+        self.camera_frame_period_ms = self.frame_interval / self.camera_fps * 1000
 
         self.lower_floor = np.array([35, 90, 35])
         self.upper_floor = np.array([95, 255, 185])

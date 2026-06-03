@@ -3,8 +3,7 @@ import logging
 import time
 from enum import Enum
 import arduino
-#import camera_YOLO as camera
-import cameraUI as camera
+import camera_YOLO as camera
 
 class Status(Enum):
     TRACK = 0

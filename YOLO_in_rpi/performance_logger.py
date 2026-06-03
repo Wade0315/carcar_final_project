@@ -9,7 +9,7 @@ PERF_LOG_FIELDS = [
     "timestamp",
     "frame_index",
     "frame_interval",
-    "frame_budget_ms",
+    "camera_frame_period_ms",
     "capture_ms",
     "preprocess_ms",
     "inference_ms",
@@ -22,8 +22,6 @@ PERF_LOG_FIELDS = [
     "processing_ms",
     "processed_gap_ms",
     "effective_fps",
-    "budget_overrun_ms",
-    "over_budget",
     "detections",
     "candidates",
     "find_ball",
@@ -37,7 +35,6 @@ class PerformanceLogger:
         self.summary_interval = max(1, summary_interval)
         self.samples = deque(maxlen=self.summary_interval)
         self.total_samples = 0
-        self.total_over_budget = 0
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
         file_exists = self.path.exists() and self.path.stat().st_size > 0
@@ -55,8 +52,6 @@ class PerformanceLogger:
         self.total_samples += 1
         if self.total_samples == 1:
             logger.info("performance first sample written path=%s", self.path)
-        if sample["over_budget"]:
-            self.total_over_budget += 1
 
         if self.total_samples % self.summary_interval == 0:
             self.log_summary()
@@ -70,21 +65,15 @@ class PerformanceLogger:
         effective_fps_values = [
             sample["effective_fps"] for sample in self.samples if sample["effective_fps"] is not None
         ]
-        recent_overruns = sum(sample["over_budget"] for sample in self.samples)
         logger.info(
             "perf summary samples=%s inference_ms(avg=%.1f max=%.1f) "
-            "processing_ms(avg=%.1f max=%.1f) effective_fps(avg=%.1f) "
-            "over_budget=%s/%s total_over_budget=%s/%s",
+            "processing_ms(avg=%.1f max=%.1f) effective_fps(avg=%.1f)",
             len(self.samples),
             sum(inference_times) / len(inference_times),
             max(inference_times),
             sum(processing_times) / len(processing_times),
             max(processing_times),
             sum(effective_fps_values) / len(effective_fps_values) if effective_fps_values else 0,
-            recent_overruns,
-            len(self.samples),
-            self.total_over_budget,
-            self.total_samples,
         )
 
     def close(self):
