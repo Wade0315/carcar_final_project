@@ -205,9 +205,10 @@ class Camera(YOLOCamera):
 if __name__ == "__main__":
     setup_logging()
     with Camera() as tracker:
-        tracker.single_test()
-        for find_ball, error, target in tracker.streaming():
-            if target is not None:
-                logger.info("find_ball=%s error=%s area=%s", find_ball, error, target["area"])
-            else:
-                logger.info("find_ball=%s error=%s", find_ball, error)
+        #tracker.single_test()
+        tracker.capture_images()
+        # for find_ball, error, target in tracker.streaming():
+        #     if target is not None:
+        #         logger.info("find_ball=%s error=%s area=%s", find_ball, error, target["area"])
+        #     else:
+        #         logger.info("find_ball=%s error=%s", find_ball, error)
