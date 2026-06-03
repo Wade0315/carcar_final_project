@@ -4,6 +4,7 @@ import time
 from enum import Enum
 import arduino
 import camera_YOLO as camera
+#import cameraUI as camera
 
 class Status(Enum):
     TRACK = 0
@@ -14,8 +15,8 @@ class Status(Enum):
 
 FOUND_TOLERANCE = 2         
 CLOSE_TRACK = 20
-HEAD_CLOSE_AREA = 30000
-GROUPED_CLOSE_AREA = 65000           
+HEAD_CLOSE_AREA = 25000
+GROUPED_CLOSE_AREA = 60000           
 WARMUP_SECONDS = float(os.getenv("YOLO_WARMUP_SECONDS", "2"))
 WARMUP_STABLE_FRAMES = int(os.getenv("YOLO_WARMUP_STABLE_FRAMES", "5"))
 MAX_INFERENCE_MS = float(os.getenv("YOLO_MAX_INFERENCE_MS", "800"))
