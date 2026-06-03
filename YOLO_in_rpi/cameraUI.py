@@ -137,7 +137,6 @@ class Camera(YOLOCamera):
         processing_started_at = time.perf_counter()
         processed_frame, floor_mask, yolo_mask, find_ball, error, target = self.process_frame(raw_frame)
         processing_ms = (time.perf_counter() - processing_started_at) * 1000
-        self.record_performance(0, capture_ms, processing_ms, find_ball, error)
         area = target["area"] if target is not None else None
         logger.info("find_ball=%s error=%s area=%s", find_ball, error, area)
 
