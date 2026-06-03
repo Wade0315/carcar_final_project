@@ -155,7 +155,7 @@ class CameraBase:
                 capture_ms = self.latest_capture_ms
                 frame_index = self.latest_frame_index
                 if frame is not None and (after_frame_index is None or frame_index > after_frame_index):
-                    return frame, capture_ms, frame_index
+                    return frame.copy(), capture_ms, frame_index
                 self.latest_frame_ready.clear()
             if self.capture_stop.is_set():
                 raise RuntimeError("camera capture thread stopped")

@@ -106,11 +106,11 @@ class Camera(YOLOCamera):
                 processing_ms = (time.perf_counter() - processing_started_at) * 1000
                 self.record_performance(frame_index, capture_ms, processing_ms, find_ball, error)
                 logger.info("debug candidates=%s find_ball=%s error=%s", len(candidates), find_ball, error)
+                processed_frame = raw_frame.copy()
                 try:
-                    self.visualize_frame(raw_frame, floor_mask, candidates, target, error)
+                    self.visualize_frame(processed_frame, floor_mask, candidates, target, error)
                 except Exception:
                     logger.exception("failed to visualize frame")
-                processed_frame = raw_frame
                 area = target["area"] if target is not None else None
                 logger.info("find_ball=%s error=%s area=%s", find_ball, error, area)
                 yield find_ball, error, target
@@ -132,10 +132,10 @@ class Camera(YOLOCamera):
         os.makedirs(output_dir, exist_ok=True)
 
         raw_frame, capture_ms, _ = self.get_latest_frame()
-        original_frame = raw_frame.copy()
+        detection_frame = raw_frame.copy()
 
         processing_started_at = time.perf_counter()
-        processed_frame, floor_mask, yolo_mask, find_ball, error, target = self.process_frame(raw_frame)
+        processed_frame, floor_mask, yolo_mask, find_ball, error, target = self.process_frame(detection_frame)
         processing_ms = (time.perf_counter() - processing_started_at) * 1000
         area = target["area"] if target is not None else None
         logger.info("find_ball=%s error=%s area=%s", find_ball, error, area)
@@ -144,8 +144,15 @@ class Camera(YOLOCamera):
             timestamp = time.strftime("%Y%m%d_%H%M%S")
             filename = f"yolo_{timestamp}.jpg"
 
-        cv2.imwrite(os.path.join(output_dir, f"original_{filename}"), original_frame)
-        cv2.imwrite(os.path.join(output_dir, f"debug_{filename}"), processed_frame)
+        photo_path = os.path.join(output_dir, filename)
+        cv2.imwrite(photo_path, raw_frame)
+        logger.info("saved photo %s", photo_path)
+
+        save_debug = os.getenv("YOLO_SAVE_DEBUG_PHOTO", "").strip().lower() in {"1", "true", "yes"}
+        if save_debug:
+            debug_path = os.path.join(output_dir, f"debug_{filename}")
+            cv2.imwrite(debug_path, processed_frame)
+            logger.info("saved debug photo %s", debug_path)
         logger.info("finish")
 
     def log_camera_parameters(self):
