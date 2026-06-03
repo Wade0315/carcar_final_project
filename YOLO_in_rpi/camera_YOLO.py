@@ -97,11 +97,11 @@ class Camera(CameraBase):
         self.picam2.start()
 
         logger.info("camera activating...")
-        time.sleep(3)
+        time.sleep(1)
         self.lock_current_camera_controls()
         self.model = self.load_model(self.model_path)
         self.start_frame_capture()
-        time.sleep(3)
+        time.sleep(2)
         logger.info(
             "tracking config camera_fps=%.1f frame_interval=%s frame_budget_ms=%.1f imgsz=%s exposure_time_us=%s",
             self.camera_fps,
@@ -257,7 +257,7 @@ class Camera(CameraBase):
         self.last_detection_count = 0
         self.last_candidate_count = 0
         self.last_max_confidence = None
-
+        #proprocess inference decode
         started_at = time.perf_counter()
         input_image, scale, pad_x, pad_y = self.preprocess_for_ncnn(frame)
         preprocessed_at = time.perf_counter()
@@ -275,10 +275,12 @@ class Camera(CameraBase):
             self.update_detection_performance(started_at, preprocessed_at, inferred_at)
             logger.info("no detections above confidence %.2f", self.confidence)
             return []
-
+        #postprocess
         detections = self.nms(detections)
         self.last_detection_count = len(detections)
+        #find candidate
         candidates = self.build_candidates(detections, scale, pad_x, pad_y)
+        candidates = self.group_shuttle_candidates(candidates)
         self.last_candidate_count = len(candidates)
         self.update_detection_performance(started_at, preprocessed_at, inferred_at)
         logger.info("detections=%s candidates=%s", len(detections), len(candidates))
@@ -574,6 +576,96 @@ class Camera(CameraBase):
 
         candidates.sort(key=lambda item: item["confidence"], reverse=True)
         return candidates
+
+    def group_shuttle_candidates(self, candidates):
+        heads = [candidate for candidate in candidates if candidate.get("is_head")]
+        wholes = [candidate for candidate in candidates if not candidate.get("is_head")]
+        if not heads or not wholes:
+            return candidates
+
+        grouped = []
+        used_heads = set()
+        used_wholes = set()
+
+        for whole_index, whole in enumerate(wholes):
+            matches = []
+            for head_index, head in enumerate(heads):
+                if head_index in used_heads:
+                    continue
+                if self.head_matches_whole(head, whole):
+                    matches.append((head_index, head))
+
+            if not matches:
+                continue
+
+            head_index, head = max(matches, key=lambda item: item[1]["confidence"])
+            grouped.append(self.merge_shuttle_candidate(head, whole))
+            used_heads.add(head_index)
+            used_wholes.add(whole_index)
+
+        for head_index, head in enumerate(heads):
+            if head_index not in used_heads:
+                grouped.append(head)
+        for whole_index, whole in enumerate(wholes):
+            if whole_index not in used_wholes:
+                grouped.append(whole)
+
+        grouped.sort(key=lambda item: item["confidence"], reverse=True)
+        return grouped
+
+    def head_matches_whole(self, head, whole):
+        return (
+            self.point_in_bbox((head["target_cx"], head["target_cy"]), whole["bbox"])
+            or self.bboxes_intersect(head["bbox"], whole["bbox"])
+        )
+
+    def point_in_bbox(self, point, bbox):
+        x, y = point
+        x1, y1, x2, y2 = bbox
+        return x1 <= x <= x2 and y1 <= y <= y2
+
+    def bboxes_intersect(self, bbox_a, bbox_b):
+        ax1, ay1, ax2, ay2 = bbox_a
+        bx1, by1, bx2, by2 = bbox_b
+        return min(ax2, bx2) > max(ax1, bx1) and min(ay2, by2) > max(ay1, by1)
+
+    def merge_shuttle_candidate(self, head, whole):
+        x1 = min(head["bbox"][0], whole["bbox"][0])
+        y1 = min(head["bbox"][1], whole["bbox"][1])
+        x2 = max(head["bbox"][2], whole["bbox"][2])
+        y2 = max(head["bbox"][3], whole["bbox"][3])
+        w = x2 - x1
+        h = y2 - y1
+        area = w * h
+        target_cx = head["target_cx"]
+        target_cy = head["target_cy"]
+
+        merged = dict(head)
+        merged.update({
+            "rect": ((target_cx, target_cy), (w, h), 0),
+            "bbox": (x1, y1, x2, y2),
+            "area": area,
+            "confidence": max(head["confidence"], whole["confidence"]),
+            "required_confidence": max(
+                head.get("required_confidence", 0),
+                whole.get("required_confidence", 0),
+            ),
+            "class_name": f"{head['class_name']}+{whole['class_name']}",
+            "is_head": True,
+            "rect_cx": target_cx,
+            "rect_cy": target_cy,
+            "target_cx": target_cx,
+            "target_cy": target_cy,
+            "error": target_cx - self.width // 2,
+            "w_h_ratio": min(w, h) / max(w, h),
+            "head_found": True,
+            "source": "yolo_grouped",
+            "head_bbox": head["bbox"],
+            "whole_bbox": whole["bbox"],
+            "head_confidence": head["confidence"],
+            "whole_confidence": whole["confidence"],
+        })
+        return merged
 
     def process_frame(self, frame):
         _, _, target, find_ball, error = self.detect_frame(frame)
