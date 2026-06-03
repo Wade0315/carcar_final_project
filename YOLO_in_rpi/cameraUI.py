@@ -148,16 +148,33 @@ class Camera(YOLOCamera):
         cv2.imwrite(os.path.join(output_dir, f"debug_{filename}"), processed_frame)
         logger.info("finish")
 
+    def log_camera_parameters(self):
+        metadata = self.picam2.capture_metadata()
+        logger.info(
+            "camera params ExposureTime=%s us AnalogueGain=%s ColourGains=%s "
+            "FrameDuration=%s us Lux=%s",
+            metadata.get("ExposureTime"),
+            metadata.get("AnalogueGain"),
+            metadata.get("ColourGains"),
+            metadata.get("FrameDuration"),
+            metadata.get("Lux"),
+        )
+
     def capture_images(self, output_dir="/home/waryt/YOLO/image", max_images=None):
         os.makedirs(output_dir, exist_ok=True)
         logger.info("capturing images to %s. Press 't' to save, 'q' to quit.", output_dir)
 
         count = 0
         last_frame_index = None
+        next_params_log_at = 0.0
         try:
             while max_images is None or count < max_images:
                 frame, _, frame_index = self.get_latest_frame(last_frame_index)
                 last_frame_index = frame_index
+                now = time.monotonic()
+                if now >= next_params_log_at:
+                    self.log_camera_parameters()
+                    next_params_log_at = now + 1.0
                 cv2.imshow("Capture View", frame)
 
                 key = cv2.waitKey(1) & 0xFF
