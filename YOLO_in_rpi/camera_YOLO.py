@@ -488,6 +488,15 @@ class Camera(CameraBase):
 
         return kept
 
+    def required_confidence(self, area):
+        if area < 300:
+            return 0.30
+        if area < 1000:
+            return 0.45
+        if area < 3000:
+            return 0.60
+        return 0.75
+
     def iou(self, box_a, box_b):
         ax1, ay1, ax2, ay2 = box_a
         bx1, by1, bx2, by2 = box_b
@@ -533,12 +542,23 @@ class Camera(CameraBase):
             target_cy = y1 + h // 2
             error_from_center = target_cx - self.width // 2
             ratio = min(w, h) / max(w, h)
+            area = w * h
+            min_confidence = self.required_confidence(area)
+            if detection["confidence"] < min_confidence:
+                logger.debug(
+                    "reject candidate area=%s confidence=%.3f required=%.3f",
+                    area,
+                    detection["confidence"],
+                    min_confidence,
+                )
+                continue
 
             candidates.append({
                 "rect": ((target_cx, target_cy), (w, h), 0),
                 "bbox": (x1, y1, x2, y2),
-                "area": w * h,
+                "area": area,
                 "confidence": detection["confidence"],
+                "required_confidence": min_confidence,
                 "class_id": class_id,
                 "class_name": class_name,
                 "is_head": "head" in class_name,
