@@ -14,7 +14,8 @@ class Status(Enum):
 
 FOUND_TOLERANCE = 2         
 CLOSE_TRACK = 20
-CLOSE_AREA = 25000           
+HEAD_CLOSE_AREA = 30000
+GROUPED_CLOSE_AREA = 65000           
 WARMUP_SECONDS = float(os.getenv("YOLO_WARMUP_SECONDS", "2"))
 WARMUP_STABLE_FRAMES = int(os.getenv("YOLO_WARMUP_STABLE_FRAMES", "5"))
 MAX_INFERENCE_MS = float(os.getenv("YOLO_MAX_INFERENCE_MS", "800"))
@@ -91,9 +92,10 @@ def main():
                     if error is None:
                         state = Status.IDLE
                     elif abs(error) <= CLOSE_TRACK:
-                        if has_target(target) and target["area"] >= CLOSE_AREA:
-                            state = Status.CLOSE_ENOUGH
-                            logger.info("%s error=%s area=%s", state.name, error, target["area"])
+                        if has_target(target):
+                            if (target["source"] == "yolo" and ((target["is_head"] == True and target["area"] >= HEAD_CLOSE_AREA) or (target["is_head"] == False and target["area"] >= GROUPED_CLOSE_AREA)) or (target["source"] == "yolo_grouped" and target["area"] >= GROUPED_CLOSE_AREA)):
+                                state = Status.CLOSE_ENOUGH
+                                logger.info("%s error=%s area=%s", state.name, error, target["area"])
                         else:
                             state = Status.TRACK
                             if not has_target(target):

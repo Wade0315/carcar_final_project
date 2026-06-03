@@ -395,7 +395,7 @@ class Camera(CameraBase):
         if area < 1000:
             return 0.45
         if area < 3000:
-            return 0.60
+            return 0.55
         return 0.75
 
     def iou(self, box_a, box_b):
