@@ -106,11 +106,11 @@ class Camera(YOLOCamera):
                 processing_ms = (time.perf_counter() - processing_started_at) * 1000
                 self.record_performance(frame_index, capture_ms, processing_ms, find_ball, error)
                 logger.info("debug candidates=%s find_ball=%s error=%s", len(candidates), find_ball, error)
+                processed_frame = raw_frame.copy()
                 try:
-                    self.visualize_frame(raw_frame, floor_mask, candidates, target, error)
+                    self.visualize_frame(processed_frame, floor_mask, candidates, target, error)
                 except Exception:
                     logger.exception("failed to visualize frame")
-                processed_frame = raw_frame
                 area = target["area"] if target is not None else None
                 logger.info("find_ball=%s error=%s area=%s", find_ball, error, area)
                 yield find_ball, error, target
@@ -132,12 +132,11 @@ class Camera(YOLOCamera):
         os.makedirs(output_dir, exist_ok=True)
 
         raw_frame, capture_ms, _ = self.get_latest_frame()
-        original_frame = raw_frame.copy()
+        detection_frame = raw_frame.copy()
 
         processing_started_at = time.perf_counter()
-        processed_frame, floor_mask, yolo_mask, find_ball, error, target = self.process_frame(raw_frame)
+        processed_frame, floor_mask, yolo_mask, find_ball, error, target = self.process_frame(detection_frame)
         processing_ms = (time.perf_counter() - processing_started_at) * 1000
-        self.record_performance(0, capture_ms, processing_ms, find_ball, error)
         area = target["area"] if target is not None else None
         logger.info("find_ball=%s error=%s area=%s", find_ball, error, area)
 
@@ -145,9 +144,28 @@ class Camera(YOLOCamera):
             timestamp = time.strftime("%Y%m%d_%H%M%S")
             filename = f"yolo_{timestamp}.jpg"
 
-        cv2.imwrite(os.path.join(output_dir, f"original_{filename}"), original_frame)
-        cv2.imwrite(os.path.join(output_dir, f"debug_{filename}"), processed_frame)
+        photo_path = os.path.join(output_dir, filename)
+        cv2.imwrite(photo_path, raw_frame)
+        logger.info("saved photo %s", photo_path)
+
+        save_debug = os.getenv("YOLO_SAVE_DEBUG_PHOTO", "").strip().lower() in {"1", "true", "yes"}
+        if save_debug:
+            debug_path = os.path.join(output_dir, f"debug_{filename}")
+            cv2.imwrite(debug_path, processed_frame)
+            logger.info("saved debug photo %s", debug_path)
         logger.info("finish")
+
+    def log_camera_parameters(self):
+        metadata = self.picam2.capture_metadata()
+        logger.info(
+            "camera params ExposureTime=%s us AnalogueGain=%s ColourGains=%s "
+            "FrameDuration=%s us Lux=%s",
+            metadata.get("ExposureTime"),
+            metadata.get("AnalogueGain"),
+            metadata.get("ColourGains"),
+            metadata.get("FrameDuration"),
+            metadata.get("Lux"),
+        )
 
     def capture_images(self, output_dir="/home/waryt/YOLO/image", max_images=None):
         os.makedirs(output_dir, exist_ok=True)
@@ -155,10 +173,15 @@ class Camera(YOLOCamera):
 
         count = 0
         last_frame_index = None
+        next_params_log_at = 0.0
         try:
             while max_images is None or count < max_images:
                 frame, _, frame_index = self.get_latest_frame(last_frame_index)
                 last_frame_index = frame_index
+                now = time.monotonic()
+                if now >= next_params_log_at:
+                    self.log_camera_parameters()
+                    next_params_log_at = now + 1.0
                 cv2.imshow("Capture View", frame)
 
                 key = cv2.waitKey(1) & 0xFF
@@ -182,9 +205,10 @@ class Camera(YOLOCamera):
 if __name__ == "__main__":
     setup_logging()
     with Camera() as tracker:
-        tracker.single_test()
-        for find_ball, error, target in tracker.streaming():
-            if target is not None:
-                logger.info("find_ball=%s error=%s area=%s", find_ball, error, target["area"])
-            else:
-                logger.info("find_ball=%s error=%s", find_ball, error)
+        #tracker.single_test()
+        tracker.capture_images()
+        # for find_ball, error, target in tracker.streaming():
+        #     if target is not None:
+        #         logger.info("find_ball=%s error=%s area=%s", find_ball, error, target["area"])
+        #     else:
+        #         logger.info("find_ball=%s error=%s", find_ball, error)

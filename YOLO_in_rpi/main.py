@@ -3,8 +3,8 @@ import logging
 import time
 from enum import Enum
 import arduino
-#import camera_YOLO as camera
-import cameraUI as camera
+import camera_YOLO as camera
+#import cameraUI as camera
 
 class Status(Enum):
     TRACK = 0
@@ -15,7 +15,8 @@ class Status(Enum):
 
 FOUND_TOLERANCE = 2         
 CLOSE_TRACK = 20
-CLOSE_AREA = 25000           
+HEAD_CLOSE_AREA = 25000
+GROUPED_CLOSE_AREA = 60000           
 WARMUP_SECONDS = float(os.getenv("YOLO_WARMUP_SECONDS", "2"))
 WARMUP_STABLE_FRAMES = int(os.getenv("YOLO_WARMUP_STABLE_FRAMES", "5"))
 MAX_INFERENCE_MS = float(os.getenv("YOLO_MAX_INFERENCE_MS", "800"))
@@ -36,6 +37,25 @@ def setup_logging():
 
 def has_target(target):
     return True if target is not None else False
+
+def is_close_enough_target(target):
+    if not has_target(target):
+        return False
+
+    source = target.get("source")
+    area = target.get("area", 0)
+    is_head = target.get("is_head")
+
+    if source == "yolo_grouped":
+        return area >= GROUPED_CLOSE_AREA
+
+    if source == "yolo":
+        if is_head is True:
+            return area >= HEAD_CLOSE_AREA
+        if is_head is False:
+            return area >= GROUPED_CLOSE_AREA
+
+    return False
 
 def main():
 
@@ -92,7 +112,7 @@ def main():
                     if error is None:
                         state = Status.IDLE
                     elif abs(error) <= CLOSE_TRACK:
-                        if has_target(target) and target["area"] >= CLOSE_AREA:
+                        if is_close_enough_target(target) :
                             state = Status.CLOSE_ENOUGH
                             logger.info("%s error=%s area=%s", state.name, error, target["area"])
                         else:

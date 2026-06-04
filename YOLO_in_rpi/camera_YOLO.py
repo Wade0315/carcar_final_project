@@ -1,7 +1,6 @@
 import logging
 import os
 from pathlib import Path
-import threading
 import time
 
 import cv2
@@ -41,29 +40,16 @@ class Camera(CameraBase):
         target_class=None,
         exposure_time_us=DEFAULT_EXPOSURE_TIME_US,
     ):
-        super().__init__(width, height, flip_code)
-
-        try:
-            from picamera2 import Picamera2
-        except ImportError as exc:
-            raise RuntimeError(
-                "picamera2 is required for camera_YOLO.py. Use cameraFAKE.py for local image preview."
-            ) from exc
-
-        self.picam2 = Picamera2()
-        self.closed = False
-        self.frame_interval = FRAME_INTERVAL
-        self.camera_fps = float(os.getenv("YOLO_CAMERA_FPS", "30"))
-        self.exposure_time_us = int(os.getenv("YOLO_EXPOSURE_TIME_US", exposure_time_us))
-        self.frame_budget_ms = self.frame_interval / self.camera_fps * 1000
-        self.latest_frame = None
-        self.latest_capture_ms = None
-        self.latest_frame_index = -1
-        self.latest_frame_lock = threading.Lock()
-        self.latest_frame_ready = threading.Event()
-        self.capture_stop = threading.Event()
-        self.capture_error = None
-        self.capture_thread = None
+        camera_fps = float(os.getenv("YOLO_CAMERA_FPS", "30"))
+        exposure_time_us = int(os.getenv("YOLO_EXPOSURE_TIME_US", exposure_time_us))
+        super().__init__(
+            width,
+            height,
+            flip_code,
+            frame_interval=FRAME_INTERVAL,
+            camera_fps=camera_fps,
+            exposure_time_us=exposure_time_us,
+        )
         default_perf_log = (
             Path(__file__).resolve().parent
             / "logs"
@@ -88,73 +74,18 @@ class Camera(CameraBase):
         self.last_candidate_count = 0
         self.last_max_confidence = None
 
-        config = self.picam2.create_video_configuration(
-            main={"format": "RGB888", "size": (self.width, self.height)},
-            controls={"FrameRate": self.camera_fps},
-            buffer_count=3,
-        )
-        self.picam2.configure(config)
-        self.picam2.start()
-
-        logger.info("camera activating...")
-        time.sleep(3)
-        self.lock_current_camera_controls()
+        self.open_camera(warmup_seconds=1)
         self.model = self.load_model(self.model_path)
         self.start_frame_capture()
-        time.sleep(3)
+        time.sleep(2)
         logger.info(
-            "tracking config camera_fps=%.1f frame_interval=%s frame_budget_ms=%.1f imgsz=%s exposure_time_us=%s",
+            "tracking config camera_fps=%.1f frame_interval=%s camera_frame_period_ms=%.1f imgsz=%s exposure_time_us=%s",
             self.camera_fps,
             self.frame_interval,
-            self.frame_budget_ms,
+            self.camera_frame_period_ms,
             self.imgsz,
             self.exposure_time_us,
         )
-
-    def start_frame_capture(self):
-        self.capture_thread = threading.Thread(
-            target=self.capture_latest_frames,
-            name="camera-capture",
-            daemon=True,
-        )
-        self.capture_thread.start()
-        logger.info("camera capture thread started")
-
-    def capture_latest_frames(self):
-        frame_index = 0
-        try:
-            while not self.capture_stop.is_set():
-                capture_started_at = time.perf_counter()
-                frame = self.picam2.capture_array()
-                frame = self.fix_orientation(frame)
-                capture_ms = (time.perf_counter() - capture_started_at) * 1000
-                with self.latest_frame_lock:
-                    self.latest_frame = frame
-                    self.latest_capture_ms = capture_ms
-                    self.latest_frame_index = frame_index
-                self.latest_frame_ready.set()
-                frame_index += 1
-        except Exception as exc:
-            self.capture_error = exc
-            self.latest_frame_ready.set()
-            if not self.capture_stop.is_set():
-                logger.exception("camera capture thread failed")
-
-    def get_latest_frame(self, after_frame_index=None, timeout=2):
-        while True:
-            if self.capture_error is not None:
-                raise RuntimeError("camera capture thread failed") from self.capture_error
-            with self.latest_frame_lock:
-                frame = self.latest_frame
-                capture_ms = self.latest_capture_ms
-                frame_index = self.latest_frame_index
-                if frame is not None and (after_frame_index is None or frame_index > after_frame_index):
-                    return frame, capture_ms, frame_index
-                self.latest_frame_ready.clear()
-            if self.capture_stop.is_set():
-                raise RuntimeError("camera capture thread stopped")
-            if not self.latest_frame_ready.wait(timeout):
-                raise TimeoutError("timed out waiting for camera frame")
 
     def load_model(self, model_path):
         try:
@@ -218,35 +149,6 @@ class Camera(CameraBase):
             return {int(idx): str(name).lower() for idx, name in names.items()}
         return {}
 
-    def lock_current_camera_controls(self):
-        for _ in range(10):
-            self.picam2.capture_array()
-        metadata = self.picam2.capture_metadata()
-        measured_exposure_time = metadata.get("ExposureTime")
-        measured_analogue_gain = metadata.get("AnalogueGain")
-        analogue_gain = measured_analogue_gain + 1 if measured_analogue_gain is not None else None
-        colour_gains = metadata.get("ColourGains")
-
-        controls = {
-            "AeEnable": False,
-            "AwbEnable": False,
-            "ExposureTime": self.exposure_time_us,
-        }
-        if analogue_gain is not None:
-            controls["AnalogueGain"] = analogue_gain
-        if colour_gains is not None:
-            controls["ColourGains"] = colour_gains
-
-        self.picam2.set_controls(controls)
-        logger.info(
-            "lock camera ExposureTime=%s us (measured=%s us) AnalogueGain=%s (measured=%s) ColourGains=%s",
-            self.exposure_time_us,
-            measured_exposure_time,
-            analogue_gain,
-            measured_analogue_gain,
-            colour_gains,
-        )
-
     def detect_frame(self, frame):
         floor_mask = self.build_floor_mask(frame)
         candidates = self.detect_yolo_candidates(frame)
@@ -257,7 +159,7 @@ class Camera(CameraBase):
         self.last_detection_count = 0
         self.last_candidate_count = 0
         self.last_max_confidence = None
-
+        #proprocess inference decode
         started_at = time.perf_counter()
         input_image, scale, pad_x, pad_y = self.preprocess_for_ncnn(frame)
         preprocessed_at = time.perf_counter()
@@ -275,10 +177,12 @@ class Camera(CameraBase):
             self.update_detection_performance(started_at, preprocessed_at, inferred_at)
             logger.info("no detections above confidence %.2f", self.confidence)
             return []
-
+        #postprocess
         detections = self.nms(detections)
         self.last_detection_count = len(detections)
+        #find candidate
         candidates = self.build_candidates(detections, scale, pad_x, pad_y)
+        candidates = self.group_shuttle_candidates(candidates)
         self.last_candidate_count = len(candidates)
         self.update_detection_performance(started_at, preprocessed_at, inferred_at)
         logger.info("detections=%s candidates=%s", len(detections), len(candidates))
@@ -296,7 +200,6 @@ class Camera(CameraBase):
         if self.performance_logger is None:
             return
 
-        budget_overrun_ms = processing_ms - self.frame_budget_ms
         recorded_at = time.perf_counter()
         processed_gap_ms = None
         effective_fps = None
@@ -309,7 +212,7 @@ class Camera(CameraBase):
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "frame_index": frame_index,
             "frame_interval": self.frame_interval,
-            "frame_budget_ms": round(self.frame_budget_ms, 3),
+            "camera_frame_period_ms": round(self.camera_frame_period_ms, 3),
             "capture_ms": round(capture_ms, 3),
             "preprocess_ms": round(self.last_performance.get("preprocess_ms", 0), 3),
             "inference_ms": round(self.last_performance.get("inference_ms", 0), 3),
@@ -322,8 +225,6 @@ class Camera(CameraBase):
             "processing_ms": round(processing_ms, 3),
             "processed_gap_ms": round(processed_gap_ms, 3) if processed_gap_ms is not None else None,
             "effective_fps": round(effective_fps, 3) if effective_fps is not None else None,
-            "budget_overrun_ms": round(max(0, budget_overrun_ms), 3),
-            "over_budget": int(budget_overrun_ms > 0),
             "detections": self.last_detection_count,
             "candidates": self.last_candidate_count,
             "find_ball": int(find_ball),
@@ -488,6 +389,15 @@ class Camera(CameraBase):
 
         return kept
 
+    def required_confidence(self, area):
+        if area < 300:
+            return 0.30
+        if area < 1000:
+            return 0.45
+        if area < 3000:
+            return 0.50
+        return 0.55
+
     def iou(self, box_a, box_b):
         ax1, ay1, ax2, ay2 = box_a
         bx1, by1, bx2, by2 = box_b
@@ -533,12 +443,23 @@ class Camera(CameraBase):
             target_cy = y1 + h // 2
             error_from_center = target_cx - self.width // 2
             ratio = min(w, h) / max(w, h)
+            area = w * h
+            min_confidence = self.required_confidence(area)
+            if detection["confidence"] < min_confidence:
+                logger.debug(
+                    "reject candidate area=%s confidence=%.3f required=%.3f",
+                    area,
+                    detection["confidence"],
+                    min_confidence,
+                )
+                continue
 
             candidates.append({
                 "rect": ((target_cx, target_cy), (w, h), 0),
                 "bbox": (x1, y1, x2, y2),
-                "area": w * h,
+                "area": area,
                 "confidence": detection["confidence"],
+                "required_confidence": min_confidence,
                 "class_id": class_id,
                 "class_name": class_name,
                 "is_head": "head" in class_name,
@@ -554,6 +475,96 @@ class Camera(CameraBase):
 
         candidates.sort(key=lambda item: item["confidence"], reverse=True)
         return candidates
+
+    def group_shuttle_candidates(self, candidates):
+        heads = [candidate for candidate in candidates if candidate.get("is_head")]
+        wholes = [candidate for candidate in candidates if not candidate.get("is_head")]
+        if not heads or not wholes:
+            return candidates
+
+        grouped = []
+        used_heads = set()
+        used_wholes = set()
+
+        for whole_index, whole in enumerate(wholes):
+            matches = []
+            for head_index, head in enumerate(heads):
+                if head_index in used_heads:
+                    continue
+                if self.head_matches_whole(head, whole):
+                    matches.append((head_index, head))
+
+            if not matches:
+                continue
+
+            head_index, head = max(matches, key=lambda item: item[1]["confidence"])
+            grouped.append(self.merge_shuttle_candidate(head, whole))
+            used_heads.add(head_index)
+            used_wholes.add(whole_index)
+
+        for head_index, head in enumerate(heads):
+            if head_index not in used_heads:
+                grouped.append(head)
+        for whole_index, whole in enumerate(wholes):
+            if whole_index not in used_wholes:
+                grouped.append(whole)
+
+        grouped.sort(key=lambda item: item["confidence"], reverse=True)
+        return grouped
+
+    def head_matches_whole(self, head, whole):
+        return (
+            self.point_in_bbox((head["target_cx"], head["target_cy"]), whole["bbox"])
+            or self.bboxes_intersect(head["bbox"], whole["bbox"])
+        )
+
+    def point_in_bbox(self, point, bbox):
+        x, y = point
+        x1, y1, x2, y2 = bbox
+        return x1 <= x <= x2 and y1 <= y <= y2
+
+    def bboxes_intersect(self, bbox_a, bbox_b):
+        ax1, ay1, ax2, ay2 = bbox_a
+        bx1, by1, bx2, by2 = bbox_b
+        return min(ax2, bx2) > max(ax1, bx1) and min(ay2, by2) > max(ay1, by1)
+
+    def merge_shuttle_candidate(self, head, whole):
+        x1 = min(head["bbox"][0], whole["bbox"][0])
+        y1 = min(head["bbox"][1], whole["bbox"][1])
+        x2 = max(head["bbox"][2], whole["bbox"][2])
+        y2 = max(head["bbox"][3], whole["bbox"][3])
+        w = x2 - x1
+        h = y2 - y1
+        area = w * h
+        target_cx = head["target_cx"]
+        target_cy = head["target_cy"]
+
+        merged = dict(head)
+        merged.update({
+            "rect": ((target_cx, target_cy), (w, h), 0),
+            "bbox": (x1, y1, x2, y2),
+            "area": area,
+            "confidence": max(head["confidence"], whole["confidence"]),
+            "required_confidence": max(
+                head.get("required_confidence", 0),
+                whole.get("required_confidence", 0),
+            ),
+            "class_name": f"{head['class_name']}+{whole['class_name']}",
+            "is_head": True,
+            "rect_cx": target_cx,
+            "rect_cy": target_cy,
+            "target_cx": target_cx,
+            "target_cy": target_cy,
+            "error": target_cx - self.width // 2,
+            "w_h_ratio": min(w, h) / max(w, h),
+            "head_found": True,
+            "source": "yolo_grouped",
+            "head_bbox": head["bbox"],
+            "whole_bbox": whole["bbox"],
+            "head_confidence": head["confidence"],
+            "whole_confidence": whole["confidence"],
+        })
+        return merged
 
     def process_frame(self, frame):
         _, _, target, find_ball, error = self.detect_frame(frame)
@@ -580,18 +591,11 @@ class Camera(CameraBase):
             self.close()
 
     def close(self):
-        if self.closed:
-            return
-        self.capture_stop.set()
-        if self.capture_thread is not None:
-            self.capture_thread.join(timeout=1)
-        self.picam2.stop()
-        if self.capture_thread is not None:
-            self.capture_thread.join(timeout=1)
-        if self.performance_logger is not None:
-            self.performance_logger.close()
-        self.closed = True
-        logger.info("Camera closed.")
+        already_closed = self.closed
+        super().close()
+        performance_logger = getattr(self, "performance_logger", None)
+        if not already_closed and performance_logger is not None:
+            performance_logger.close()
 
 
 if __name__ == "__main__":
