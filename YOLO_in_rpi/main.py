@@ -38,6 +38,25 @@ def setup_logging():
 def has_target(target):
     return True if target is not None else False
 
+def is_close_enough_target(target):
+    if not has_target(target):
+        return False
+
+    source = target.get("source")
+    area = target.get("area", 0)
+    is_head = target.get("is_head")
+
+    if source == "yolo_grouped":
+        return area >= GROUPED_CLOSE_AREA
+
+    if source == "yolo":
+        if is_head is True:
+            return area >= HEAD_CLOSE_AREA
+        if is_head is False:
+            return area >= GROUPED_CLOSE_AREA
+
+    return False
+
 def main():
 
     found_count = 0
@@ -93,10 +112,9 @@ def main():
                     if error is None:
                         state = Status.IDLE
                     elif abs(error) <= CLOSE_TRACK:
-                        if has_target(target):
-                            if (target["source"] == "yolo" and ((target["is_head"] == True and target["area"] >= HEAD_CLOSE_AREA) or (target["is_head"] == False and target["area"] >= GROUPED_CLOSE_AREA)) or (target["source"] == "yolo_grouped" and target["area"] >= GROUPED_CLOSE_AREA)):
-                                state = Status.CLOSE_ENOUGH
-                                logger.info("%s error=%s area=%s", state.name, error, target["area"])
+                        if is_close_enough_target(target) :
+                            state = Status.CLOSE_ENOUGH
+                            logger.info("%s error=%s area=%s", state.name, error, target["area"])
                         else:
                             state = Status.TRACK
                             if not has_target(target):
