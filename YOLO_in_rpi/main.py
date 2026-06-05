@@ -20,6 +20,7 @@ GROUPED_CLOSE_AREA = 60000
 WARMUP_SECONDS = float(os.getenv("YOLO_WARMUP_SECONDS", "2"))
 WARMUP_STABLE_FRAMES = int(os.getenv("YOLO_WARMUP_STABLE_FRAMES", "5"))
 MAX_INFERENCE_MS = float(os.getenv("YOLO_MAX_INFERENCE_MS", "800"))
+SLOW_INFERENCE_TOLERANCE = max(1, int(os.getenv("YOLO_SLOW_INFERENCE_TOLERANCE", "3")))
 
 logger = logging.getLogger(__name__)
 
@@ -70,13 +71,16 @@ def main():
             last_sent_state = state
             warmup_ends_at = time.monotonic() + WARMUP_SECONDS
             stable_inference_count = 0
+            slow_inference_count = 0
             controls_enabled = False
             logger.info(
                 "warming up YOLO for at least %.1f seconds; waiting for %s consecutive "
-                "inferences <= %.1f ms before enabling motors",
+                "inferences <= %.1f ms before enabling motors; motors stop after %s "
+                "consecutive slow inferences",
                 WARMUP_SECONDS,
                 WARMUP_STABLE_FRAMES,
                 MAX_INFERENCE_MS,
+                SLOW_INFERENCE_TOLERANCE,
             )
 
             for ball_detected, error, target in cam.streaming():
@@ -84,12 +88,34 @@ def main():
                 inference_ms = cam.last_performance.get("inference_ms", float("inf"))
                 if inference_ms <= MAX_INFERENCE_MS:
                     stable_inference_count += 1
+                    slow_inference_count = 0
                 else:
                     stable_inference_count = 0
-                    logger.warning("slow inference %.1f ms > %.1f ms; motors remain stopped",inference_ms,MAX_INFERENCE_MS,)
+                    slow_inference_count += 1
+                    if controls_enabled and slow_inference_count < SLOW_INFERENCE_TOLERANCE:
+                        logger.warning(
+                            "slow inference %.1f ms > %.1f ms; keep motors enabled "
+                            "slow_count=%s/%s",
+                            inference_ms,
+                            MAX_INFERENCE_MS,
+                            slow_inference_count,
+                            SLOW_INFERENCE_TOLERANCE,
+                        )
+                    else:
+                        logger.warning(
+                            "slow inference %.1f ms > %.1f ms; motors remain stopped "
+                            "slow_count=%s/%s",
+                            inference_ms,
+                            MAX_INFERENCE_MS,
+                            slow_inference_count,
+                            SLOW_INFERENCE_TOLERANCE,
+                        )
 
                 inference_ready = stable_inference_count >= WARMUP_STABLE_FRAMES
-                controls_ready = time.monotonic() >= warmup_ends_at and inference_ready
+                if controls_enabled:
+                    controls_ready = slow_inference_count < SLOW_INFERENCE_TOLERANCE
+                else:
+                    controls_ready = time.monotonic() >= warmup_ends_at and inference_ready
                 if not controls_ready:
                     found_count = 0
                     state = Status.NOT_FOUND

@@ -65,17 +65,20 @@ class Arduino:
             msg += "\n"
 
         self.ser.write(msg.encode())
-        logger.info("send to [Arduino]: %s", msg.strip())
+        logger.info("[SEND][Arduino]: %s", msg.strip())
 
     def receive(self, wait_time=0.5):
         if self.ser is None:
             logger.warning("serial not connected")
-            return None
+            return []
 
+        messages = []
         while self.ser.in_waiting > 0:
             msg = self.ser.readline().decode(errors="ignore").strip()
-            logger.info("from [Arduino]: %s", msg)
-            return msg
+            if msg:
+                messages.append(msg)
+                logger.info("[GET][Arduino]: %s", msg)
+        return messages
         
     def close(self):
         if self.ser is not None:
@@ -100,9 +103,8 @@ if __name__ == "__main__":
     logger.info("waiting for Arduino messages... Press Ctrl+C to quit.")
     try:
         while True:
-            msg = mega.receive()
-            mega.print_all(msg)
-            if msg:
+            messages = mega.receive()
+            for msg in messages:
                 print(msg)
     except KeyboardInterrupt:
         logger.info("Stopped by user")
