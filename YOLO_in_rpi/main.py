@@ -15,8 +15,6 @@ class Status(Enum):
 
 FOUND_TOLERANCE = 2         
 CLOSE_TRACK = 20
-HEAD_CLOSE_AREA = 25000
-GROUPED_CLOSE_AREA = 60000           
 WARMUP_SECONDS = float(os.getenv("YOLO_WARMUP_SECONDS", "2"))
 WARMUP_STABLE_FRAMES = int(os.getenv("YOLO_WARMUP_STABLE_FRAMES", "5"))
 MAX_INFERENCE_MS = float(os.getenv("YOLO_MAX_INFERENCE_MS", "800"))
@@ -40,23 +38,29 @@ def has_target(target):
     return True if target is not None else False
 
 def is_close_enough_target(target):
+    return bool(target and target.get("close_enough"))
+
+def describe_target(target):
     if not has_target(target):
-        return False
+        return ""
 
-    source = target.get("source")
-    area = target.get("area", 0)
-    is_head = target.get("is_head")
-
-    if source == "yolo_grouped":
-        return area >= GROUPED_CLOSE_AREA
-
-    if source == "yolo":
-        if is_head is True:
-            return area >= HEAD_CLOSE_AREA
-        if is_head is False:
-            return area >= GROUPED_CLOSE_AREA
-
-    return False
+    return (
+        " source=%s area=%s grouped_area=%s grouped_cx=%s grouped_cy=%s"
+        " ball_area=%s ball_cx=%s ball_cy=%s target_cx=%s target_cy=%s close_enough=%s"
+        % (
+            target.get("source"),
+            target.get("area"),
+            target.get("grouped_area"),
+            target.get("grouped_cx"),
+            target.get("grouped_cy"),
+            target.get("ball_area"),
+            target.get("ball_cx"),
+            target.get("ball_cy"),
+            target.get("target_cx"),
+            target.get("target_cy"),
+            target.get("close_enough"),
+        )
+    )
 
 def main():
 
@@ -140,23 +144,17 @@ def main():
                     elif abs(error) <= CLOSE_TRACK:
                         if is_close_enough_target(target) :
                             state = Status.CLOSE_ENOUGH
-                            logger.info("%s error=%s area=%s", state.name, error, target["area"])
+                            logger.info("%s error=%s%s", state.name, error, describe_target(target))
                         else:
                             state = Status.TRACK
-                            if not has_target(target):
-                                logger.info("%s error=%s", state.name, error)
-                            else:
-                                logger.info("%s error=%s area=%s", state.name, error,target["area"])
+                            logger.info("%s error=%s%s", state.name, error, describe_target(target))
                     else:
                         state = Status.TRACK
 
                     if state == Status.TRACK:
                         mega.send(f"{state.value} {error}")
                         last_sent_state = state
-                        if not has_target(target):
-                            logger.info("%s error=%s", state.name, error)
-                        else:
-                            logger.info("%s error=%s area=%s", state.name, error,target["area"])
+                        logger.info("%s error=%s%s", state.name, error, describe_target(target))
                     else:
                         mega.send(state.value)
                         if last_sent_state != state:

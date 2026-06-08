@@ -14,6 +14,8 @@ DEFAULT_MODEL_PATH = "/home/waryt/YOLO/best_ncnn_model_v5nu"
 FRAME_INTERVAL = 1
 DEFAULT_IMAGE_SIZE = 256
 DEFAULT_EXPOSURE_TIME_US = 5000
+HEAD_CLOSE_AREA = int(os.getenv("YOLO_HEAD_CLOSE_AREA", "25000"))
+BALL_CLOSE_AREA = int(os.getenv("YOLO_BALL_CLOSE_AREA", "60000"))
 
 
 def setup_logging():
@@ -444,6 +446,7 @@ class Camera(CameraBase):
             error_from_center = target_cx - self.width // 2
             ratio = min(w, h) / max(w, h)
             area = w * h
+            is_head = "head" in class_name
             min_confidence = self.required_confidence(area)
             if detection["confidence"] < min_confidence:
                 logger.debug(
@@ -462,15 +465,22 @@ class Camera(CameraBase):
                 "required_confidence": min_confidence,
                 "class_id": class_id,
                 "class_name": class_name,
-                "is_head": "head" in class_name,
+                "is_head": is_head,
                 "rect_cx": target_cx,
                 "rect_cy": target_cy,
                 "target_cx": target_cx,
                 "target_cy": target_cy,
                 "error": error_from_center,
                 "w_h_ratio": ratio,
-                "head_found": True,
-                "source": "yolo",
+                "source": "yolo_head" if is_head else "yolo_ball",
+                "grouped_area": None,
+                "grouped_cx": None,
+                "grouped_cy": None,
+                "ball_area": None if is_head else area,
+                "ball_cx": None if is_head else target_cx,
+                "ball_cy": None if is_head else target_cy,
+                "ball_bbox": None if is_head else (x1, y1, x2, y2),
+                "close_enough": area >= (HEAD_CLOSE_AREA if is_head else BALL_CLOSE_AREA),
             })
 
         candidates.sort(key=lambda item: item["confidence"], reverse=True)
@@ -535,7 +545,9 @@ class Camera(CameraBase):
         y2 = max(head["bbox"][3], whole["bbox"][3])
         w = x2 - x1
         h = y2 - y1
-        area = w * h
+        grouped_area = w * h
+        grouped_cx = x1 + w // 2
+        grouped_cy = y1 + h // 2
         target_cx = head["target_cx"]
         target_cy = head["target_cy"]
 
@@ -543,7 +555,7 @@ class Camera(CameraBase):
         merged.update({
             "rect": ((target_cx, target_cy), (w, h), 0),
             "bbox": (x1, y1, x2, y2),
-            "area": area,
+            "area": grouped_area,
             "confidence": max(head["confidence"], whole["confidence"]),
             "required_confidence": max(
                 head.get("required_confidence", 0),
@@ -557,12 +569,19 @@ class Camera(CameraBase):
             "target_cy": target_cy,
             "error": target_cx - self.width // 2,
             "w_h_ratio": min(w, h) / max(w, h),
-            "head_found": True,
-            "source": "yolo_grouped",
+            "source": "yolo_grouped_head_ball",
+            "grouped_area": grouped_area,
+            "grouped_cx": grouped_cx,
+            "grouped_cy": grouped_cy,
+            "grouped_bbox": (x1, y1, x2, y2),
+            "ball_area": whole["area"],
+            "ball_cx": whole["target_cx"],
+            "ball_cy": whole["target_cy"],
+            "ball_bbox": whole["bbox"],
+            "close_enough": whole["area"] >= BALL_CLOSE_AREA,
             "head_bbox": head["bbox"],
-            "whole_bbox": whole["bbox"],
             "head_confidence": head["confidence"],
-            "whole_confidence": whole["confidence"],
+            "ball_confidence": whole["confidence"],
         })
         return merged
 
