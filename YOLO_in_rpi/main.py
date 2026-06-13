@@ -2,6 +2,7 @@ import os
 import logging
 import time
 from enum import Enum
+from pathlib import Path
 import arduino
 import camera_YOLO as camera
 #import cameraUI as camera
@@ -26,13 +27,24 @@ logger = logging.getLogger(__name__)
 def setup_logging():
     level_name = os.getenv("LOG_LEVEL", "INFO").upper()
     level = getattr(logging, level_name, logging.INFO)
+    log_path = Path(os.getenv("SYSTEM_LOG", Path(__file__).resolve().parent / "system.log"))
+    log_path.parent.mkdir(parents=True, exist_ok=True)
 
     logging.basicConfig(
         level=level,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%H:%M:%S",
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler(log_path, mode="a", encoding="utf-8"),
+        ],
+        force=True,
     )
-    logger.info("logging initialized level=%s", logging.getLevelName(level))
+    logger.info(
+        "logging initialized level=%s file=%s",
+        logging.getLevelName(level),
+        log_path,
+    )
 
 def has_target(target):
     return True if target is not None else False
