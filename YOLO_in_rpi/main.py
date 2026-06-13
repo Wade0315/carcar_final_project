@@ -29,7 +29,11 @@ def setup_logging():
     level = getattr(logging, level_name, logging.INFO)
     third_party_level_name = os.getenv("THIRD_PARTY_LOG_LEVEL", "WARNING").upper()
     third_party_level = getattr(logging, third_party_level_name, logging.WARNING)
-    default_log_path = Path(__file__).resolve().parent / f"system_{time.strftime('%Y%m%d')}.log"
+    default_log_path = (
+        Path(__file__).resolve().parent
+        / "logs"
+        / f"system_{time.strftime('%Y%m%d_%H%M%S')}.log"
+    )
     log_path = Path(os.getenv("SYSTEM_LOG", default_log_path))
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
