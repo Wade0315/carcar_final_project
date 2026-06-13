@@ -165,7 +165,8 @@ class Camera(CameraBase):
         return {}
 
     def detect_frame(self, frame):
-        floor_mask = self.build_floor_mask(frame)
+        #floor_mask = self.build_floor_mask(frame)
+        floor_mask = None
         candidates = self.detect_yolo_candidates(frame)
         find_ball, error, target = self.choose_ball(candidates)
         return floor_mask, candidates, target, find_ball, error
