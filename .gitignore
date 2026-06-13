@@ -3,6 +3,7 @@
 .vscode/
 __pycache__/
 arduino/
+logs/
 
 #YOLO image
 YOLO/image_test/
@@ -12,6 +13,7 @@ YOLO/shuttle.v3i.yolov5pytorch/
 YOLO/stock/
 YOLO/runs/
 YOLO/runs-v5n/
+
 
 *.txt
 *.jpg
