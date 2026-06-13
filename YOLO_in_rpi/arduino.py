@@ -23,11 +23,13 @@ class Arduino:
         self.baudrate = baudrate
         self.timeout = timeout
         self.ser = None
+        self.serial_missing_logged = False
         self.setup()
 
     def find_arduino(self):
         ports = serial.tools.list_ports.comports()
         keywords = ["arduino", "ch340", "usb serial"]
+        logger.info("scanning serial ports count=%s", len(ports))
 
         for port in ports:
             desc = port.description.lower()
@@ -64,20 +66,32 @@ class Arduino:
         if not msg.endswith("\n"):
             msg += "\n"
 
-        self.ser.write(msg.encode())
-        logger.info("[SEND][Arduino]: %s", msg.strip())
+        try:
+            self.ser.write(msg.encode())
+            logger.info("[SEND][Arduino]: %s", msg.strip())
+        except serial.SerialException:
+            logger.exception("failed to send serial message: %s", msg.strip())
+            raise
 
     def receive(self, wait_time=0.5):
         if self.ser is None:
-            logger.warning("serial not connected")
+            if not self.serial_missing_logged:
+                logger.info("serial not connected; receive loop will be skipped")
+                self.serial_missing_logged = True
+            else:
+                logger.debug("serial not connected")
             return []
 
         messages = []
-        while self.ser.in_waiting > 0:
-            msg = self.ser.readline().decode(errors="ignore").strip()
-            if msg:
-                messages.append(msg)
-                logger.info("[GET][Arduino]: %s", msg)
+        try:
+            while self.ser.in_waiting > 0:
+                msg = self.ser.readline().decode(errors="ignore").strip()
+                if msg:
+                    messages.append(msg)
+                    logger.info("[GET][Arduino]: %s", msg)
+        except serial.SerialException:
+            logger.exception("failed to read serial message")
+            raise
         return messages
         
     def close(self):

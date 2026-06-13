@@ -66,6 +66,7 @@ def main():
 
     found_count = 0
     last_sent_state = None
+    mega = None
 
     try:
         with camera.Camera() as cam:
@@ -77,6 +78,11 @@ def main():
             stable_inference_count = 0
             slow_inference_count = 0
             controls_enabled = False
+            logger.info(
+                "control config found_tolerance=%s close_track=%s",
+                FOUND_TOLERANCE,
+                CLOSE_TRACK,
+            )
             logger.info(
                 "warming up YOLO for at least %.1f seconds; waiting for %s consecutive "
                 "inferences <= %.1f ms before enabling motors; motors stop after %s "
@@ -123,6 +129,16 @@ def main():
                 if not controls_ready:
                     found_count = 0
                     state = Status.NOT_FOUND
+                    logger.debug(
+                        "controls blocked elapsed_warmup=%s stable_inference=%s/%s "
+                        "slow_inference=%s/%s inference_ms=%.1f",
+                        time.monotonic() >= warmup_ends_at,
+                        stable_inference_count,
+                        WARMUP_STABLE_FRAMES,
+                        slow_inference_count,
+                        SLOW_INFERENCE_TOLERANCE,
+                        inference_ms,
+                    )
                     if last_sent_state != state:
                         mega.send(state.value)
                         last_sent_state = state
@@ -169,7 +185,8 @@ def main():
                         last_sent_state = state
                         logger.info("%s", state.name)
     finally:
-        mega.close()
+        if mega is not None:
+            mega.close()
 
 if __name__ == "__main__":
     setup_logging()

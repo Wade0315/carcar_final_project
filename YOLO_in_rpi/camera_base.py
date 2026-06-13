@@ -52,6 +52,16 @@ class CameraBase:
         self.capture_stop = threading.Event()
         self.capture_error = None
         self.capture_thread = None
+        logger.info(
+            "camera base config width=%s height=%s flip_code=%s frame_interval=%s "
+            "camera_fps=%s exposure_time_us=%s",
+            self.width,
+            self.height,
+            self.flip_code,
+            self.frame_interval,
+            self.camera_fps,
+            self.exposure_time_us,
+        )
 
     def open_camera(self, warmup_seconds=1, buffer_count=3, lock_controls=True):
         try:
@@ -71,7 +81,14 @@ class CameraBase:
         self.picam2.start()
         self.closed = False
 
-        logger.info("camera activating...")
+        logger.info(
+            "camera activating size=%sx%s fps=%s buffer_count=%s warmup_seconds=%s",
+            self.width,
+            self.height,
+            self.camera_fps,
+            buffer_count,
+            warmup_seconds,
+        )
         if warmup_seconds > 0:
             time.sleep(warmup_seconds)
         if lock_controls:
@@ -139,6 +156,15 @@ class CameraBase:
                     self.latest_capture_ms = capture_ms
                     self.latest_frame_index = frame_index
                 self.latest_frame_ready.set()
+                if frame_index == 0:
+                    logger.info("first camera frame captured capture_ms=%.1f", capture_ms)
+                elif capture_ms > self.camera_frame_period_ms * 2:
+                    logger.debug(
+                        "slow camera capture frame=%s capture_ms=%.1f expected_period_ms=%.1f",
+                        frame_index,
+                        capture_ms,
+                        self.camera_frame_period_ms,
+                    )
                 frame_index += 1
         except Exception as exc:
             self.capture_error = exc
@@ -160,6 +186,12 @@ class CameraBase:
             if self.capture_stop.is_set():
                 raise RuntimeError("camera capture thread stopped")
             if not self.latest_frame_ready.wait(timeout):
+                logger.warning(
+                    "waiting for camera frame timed out after %.1fs after_frame_index=%s latest_frame_index=%s",
+                    timeout,
+                    after_frame_index,
+                    frame_index,
+                )
                 raise TimeoutError("timed out waiting for camera frame")
 
     def reset_tracking(self):
@@ -248,6 +280,14 @@ class CameraBase:
             error = target["error"]
             self.last_error = error
             self.lost_count = 0
+            logger.debug(
+                "target selected source=%s class=%s confidence=%.3f bbox=%s error=%s",
+                target.get("source"),
+                target.get("class_name"),
+                target.get("confidence", 0),
+                target.get("bbox"),
+                error,
+            )
 
             return True, error, target
 
@@ -284,7 +324,7 @@ class CameraBase:
         if self.capture_thread is not None:
             self.capture_thread.join(timeout=1)
         self.closed = True
-        logger.info("Camera closed.")
+        logger.info("Camera closed last_frame_index=%s", self.latest_frame_index)
 
     def __enter__(self):
         return self

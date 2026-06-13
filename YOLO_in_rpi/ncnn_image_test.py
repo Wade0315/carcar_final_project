@@ -36,7 +36,21 @@ class NcnnImageTester(YOLOCamera):
         self.target_class = os.getenv("YOLO_CLASS", target_class or "").strip().lower()
         self.iou_threshold = float(os.getenv("YOLO_IOU", "0.45"))
         self.class_names = self.load_class_names(self.model_path)
+        self.last_performance = {}
+        self.last_ncnn_performance = {}
+        self.last_detection_count = 0
+        self.last_candidate_count = 0
+        self.last_max_confidence = None
+        self.last_candidate_rejects = {}
         self.model = self.load_model(self.model_path)
+        logger.info(
+            "image tester config model=%s confidence=%.3f iou=%.3f target_class=%s imgsz=%s",
+            self.model_path,
+            self.confidence,
+            self.iou_threshold,
+            self.target_class or "*",
+            self.imgsz,
+        )
 
     def draw_candidates(self, frame, candidates, target=None):
         header_h = 24

@@ -16,6 +16,7 @@ DEFAULT_IMAGE_SIZE = 256
 DEFAULT_EXPOSURE_TIME_US = 5000
 HEAD_CLOSE_AREA = int(os.getenv("YOLO_HEAD_CLOSE_AREA", "25000"))
 BALL_CLOSE_AREA = int(os.getenv("YOLO_BALL_CLOSE_AREA", "60000"))
+DEBUG_FRAME_INTERVAL = max(1, int(os.getenv("YOLO_DEBUG_FRAME_INTERVAL", "30")))
 
 
 def setup_logging():
@@ -75,19 +76,31 @@ class Camera(CameraBase):
         self.last_detection_count = 0
         self.last_candidate_count = 0
         self.last_max_confidence = None
+        self.last_candidate_rejects = {}
+        self.debug_frame_interval = DEBUG_FRAME_INTERVAL
 
         self.open_camera(warmup_seconds=1)
         self.model = self.load_model(self.model_path)
         self.start_frame_capture()
         time.sleep(2)
         logger.info(
-            "tracking config camera_fps=%.1f frame_interval=%s camera_frame_period_ms=%.1f imgsz=%s exposure_time_us=%s",
+            "tracking config model=%s confidence=%.3f iou=%.3f target_class=%s "
+            "camera_fps=%.1f frame_interval=%s camera_frame_period_ms=%.1f imgsz=%s "
+            "exposure_time_us=%s head_close_area=%s ball_close_area=%s debug_frame_interval=%s",
+            self.model_path,
+            self.confidence,
+            self.iou_threshold,
+            self.target_class or "*",
             self.camera_fps,
             self.frame_interval,
             self.camera_frame_period_ms,
             self.imgsz,
             self.exposure_time_us,
+            HEAD_CLOSE_AREA,
+            BALL_CLOSE_AREA,
+            self.debug_frame_interval,
         )
+        logger.info("class names=%s", self.class_names or "not loaded")
 
     def load_model(self, model_path):
         try:
@@ -161,6 +174,7 @@ class Camera(CameraBase):
         self.last_detection_count = 0
         self.last_candidate_count = 0
         self.last_max_confidence = None
+        self.last_candidate_rejects = {}
         #proprocess inference decode
         started_at = time.perf_counter()
         input_image, scale, pad_x, pad_y = self.preprocess_for_ncnn(frame)
@@ -177,9 +191,10 @@ class Camera(CameraBase):
         #detection: {"box": (x1, y1, x2, y2),"confidence": confidence,"class_id": class_id,}
         if not detections:
             self.update_detection_performance(started_at, preprocessed_at, inferred_at)
-            logger.info("no detections above confidence %.2f", self.confidence)
+            logger.debug("no detections above confidence %.2f", self.confidence)
             return []
         #postprocess
+        before_nms = len(detections)
         detections = self.nms(detections)
         self.last_detection_count = len(detections)
         #find candidate
@@ -187,7 +202,13 @@ class Camera(CameraBase):
         candidates = self.group_shuttle_candidates(candidates)
         self.last_candidate_count = len(candidates)
         self.update_detection_performance(started_at, preprocessed_at, inferred_at)
-        logger.info("detections=%s candidates=%s", len(detections), len(candidates))
+        logger.debug(
+            "detections raw=%s after_nms=%s candidates=%s rejects=%s",
+            before_nms,
+            len(detections),
+            len(candidates),
+            self.last_candidate_rejects,
+        )
         return candidates
 
     def update_detection_performance(self, started_at, preprocessed_at, inferred_at):
@@ -233,6 +254,9 @@ class Camera(CameraBase):
             "error": error,
         }
         self.performance_logger.record(sample)
+
+    def reject_candidate(self, reason):
+        self.last_candidate_rejects[reason] = self.last_candidate_rejects.get(reason, 0) + 1
 
     def preprocess_for_ncnn(self, frame):
         source_h, source_w = frame.shape[:2]
@@ -424,6 +448,13 @@ class Camera(CameraBase):
             class_id = detection["class_id"]
             class_name = str(self.class_names.get(class_id, class_id)).lower()
             if self.target_class and self.target_class not in class_name:
+                self.reject_candidate("target_class")
+                logger.debug(
+                    "reject candidate class=%s target_class=%s confidence=%.3f",
+                    class_name,
+                    self.target_class,
+                    detection["confidence"],
+                )
                 continue
 
             x1, y1, x2, y2 = detection["box"]
@@ -437,6 +468,13 @@ class Camera(CameraBase):
             x2 = int(max(0, min(self.width - 1, round(x2))))
             y2 = int(max(0, min(self.height - 1, round(y2))))
             if x2 <= x1 or y2 <= y1:
+                self.reject_candidate("invalid_bbox")
+                logger.debug(
+                    "reject candidate invalid bbox class=%s raw_box=%s mapped_bbox=%s",
+                    class_name,
+                    detection["box"],
+                    (x1, y1, x2, y2),
+                )
                 continue
 
             w = x2 - x1
@@ -449,11 +487,14 @@ class Camera(CameraBase):
             is_head = "head" in class_name
             min_confidence = self.required_confidence(area)
             if detection["confidence"] < min_confidence:
+                self.reject_candidate("area_confidence")
                 logger.debug(
-                    "reject candidate area=%s confidence=%.3f required=%.3f",
+                    "reject candidate class=%s area=%s confidence=%.3f required=%.3f bbox=%s",
+                    class_name,
                     area,
                     detection["confidence"],
                     min_confidence,
+                    (x1, y1, x2, y2),
                 )
                 continue
 
@@ -495,6 +536,7 @@ class Camera(CameraBase):
         grouped = []
         used_heads = set()
         used_wholes = set()
+        merge_count = 0
 
         for whole_index, whole in enumerate(wholes):
             matches = []
@@ -509,6 +551,7 @@ class Camera(CameraBase):
 
             head_index, head = max(matches, key=lambda item: item[1]["confidence"])
             grouped.append(self.merge_shuttle_candidate(head, whole))
+            merge_count += 1
             used_heads.add(head_index)
             used_wholes.add(whole_index)
 
@@ -520,6 +563,13 @@ class Camera(CameraBase):
                 grouped.append(whole)
 
         grouped.sort(key=lambda item: item["confidence"], reverse=True)
+        logger.debug(
+            "grouped candidates heads=%s balls=%s merged=%s output=%s",
+            len(heads),
+            len(wholes),
+            merge_count,
+            len(grouped),
+        )
         return grouped
 
     def head_matches_whole(self, head, whole):
@@ -592,6 +642,7 @@ class Camera(CameraBase):
     def streaming(self):
         logger.info("Starting YOLO tracking...")
         last_frame_index = None
+        processed_count = 0
 
         try:
             while True:
@@ -601,6 +652,26 @@ class Camera(CameraBase):
                 find_ball, error, target = self.process_frame(raw_frame)
                 processing_ms = (time.perf_counter() - processing_started_at) * 1000
                 self.record_performance(frame_index, capture_ms, processing_ms, find_ball, error)
+                processed_count += 1
+                if processed_count == 1 or processed_count % self.debug_frame_interval == 0:
+                    logger.info(
+                        "frame=%s processed=%s capture_ms=%.1f preprocess_ms=%.1f "
+                        "inference_ms=%.1f postprocess_ms=%.1f processing_ms=%.1f "
+                        "detections=%s candidates=%s find_ball=%s error=%s target=%s rejects=%s",
+                        frame_index,
+                        processed_count,
+                        capture_ms,
+                        self.last_performance.get("preprocess_ms", 0),
+                        self.last_performance.get("inference_ms", 0),
+                        self.last_performance.get("postprocess_ms", 0),
+                        processing_ms,
+                        self.last_detection_count,
+                        self.last_candidate_count,
+                        find_ball,
+                        error,
+                        target.get("source") if target is not None else None,
+                        self.last_candidate_rejects,
+                    )
                 yield find_ball, error, target
 
         except KeyboardInterrupt:
@@ -621,5 +692,5 @@ if __name__ == "__main__":
     setup_logging()
     with Camera() as tracker:
         # tracker.single_test()
-        for find_ball, error in tracker.streaming():
+        for find_ball, error, target in tracker.streaming():
             logger.info("find_ball=%s error=%s", find_ball, error)
