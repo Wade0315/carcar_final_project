@@ -73,7 +73,7 @@ class Arduino:
             logger.exception("failed to send serial message: %s", msg.strip())
             raise
 
-    def receive(self, wait_time=0.5):
+    def receive(self):
         if self.ser is None:
             if not self.serial_missing_logged:
                 logger.info("serial not connected; receive loop will be skipped")
