@@ -19,3 +19,4 @@ YOLO/runs-v5n/
 *.jpg
 *.png
 *.zip
+*:Zone.Identifier

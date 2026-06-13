@@ -1,7 +1,7 @@
 from ultralytics import YOLO
 
 model = YOLO(
-    r"C:\Users\waryt\Desktop\carcar_final_project\YOLO\runs-v5n\detect\shuttle_yolov5n_256\weights\best.pt"
+    r"/home/waryt/carcar_final_project/YOLO/runs/detect/shuttle_yolov5nu_256_v2/weights/best.pt"
 )
 
 model.export(
