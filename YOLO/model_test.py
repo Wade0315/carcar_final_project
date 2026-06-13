@@ -1,12 +1,12 @@
 from ultralytics import YOLO
 
-model = YOLO(r"C:\Users\waryt\Desktop\carcar_final_project\YOLO\runs-v5n\detect\shuttle_yolov5n_256\weights\best.pt")
+model = YOLO(r"/home/waryt/carcar_final_project/runs/detect/shuttle_yolov5nu_256_v2/weights/best.pt")
 results = model.predict(
-    source=r"C:\Users\waryt\Desktop\carcar_final_project\YOLO\stock\image_test_1",
+    source=r"/home/waryt/carcar_final_project/YOLO/shuttle.v5i.yolov5pytorch/valid/images",
     imgsz=256,
     conf=0.25,
     save=True,
-    project=r"C:\Users\waryt\Desktop\carcar_final_project\YOLO\runs-v5n\detect",
+    project=r"/home/waryt/carcar_final_project/runs/detect_v5nu_v2",
     name="predict"
 
 )
