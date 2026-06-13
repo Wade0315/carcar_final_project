@@ -334,7 +334,7 @@ class Camera(CameraBase):
 
         if max_confidence is not None:
             self.last_max_confidence = max_confidence
-            logger.info("max raw confidence=%.4f threshold=%.4f", max_confidence, self.confidence)
+            logger.debug("max raw confidence=%.4f threshold=%.4f", max_confidence, self.confidence)
         return detections
 
     def decode_predictions(self, predictions):

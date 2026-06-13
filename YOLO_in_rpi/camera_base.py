@@ -1,4 +1,5 @@
 import logging
+import os
 import threading
 import time
 
@@ -25,6 +26,9 @@ class CameraBase:
         self.camera_fps = camera_fps
         self.exposure_time_us = exposure_time_us
         self.camera_frame_period_ms = self.frame_interval / self.camera_fps * 1000
+        self.frame_timeout_seconds = float(os.getenv("CAMERA_FRAME_TIMEOUT_SECONDS", "5"))
+        self.max_frame_timeouts = max(1, int(os.getenv("CAMERA_MAX_FRAME_TIMEOUTS", "3")))
+        self.frame_timeout_count = 0
 
         self.lower_floor = np.array([35, 90, 35])
         self.upper_floor = np.array([95, 255, 185])
@@ -54,13 +58,15 @@ class CameraBase:
         self.capture_thread = None
         logger.info(
             "camera base config width=%s height=%s flip_code=%s frame_interval=%s "
-            "camera_fps=%s exposure_time_us=%s",
+            "camera_fps=%s exposure_time_us=%s frame_timeout_seconds=%s max_frame_timeouts=%s",
             self.width,
             self.height,
             self.flip_code,
             self.frame_interval,
             self.camera_fps,
             self.exposure_time_us,
+            self.frame_timeout_seconds,
+            self.max_frame_timeouts,
         )
 
     def open_camera(self, warmup_seconds=1, buffer_count=3, lock_controls=True):
@@ -172,7 +178,9 @@ class CameraBase:
             if not self.capture_stop.is_set():
                 logger.exception("camera capture thread failed")
 
-    def get_latest_frame(self, after_frame_index=None, timeout=2):
+    def get_latest_frame(self, after_frame_index=None, timeout=None):
+        if timeout is None:
+            timeout = self.frame_timeout_seconds
         while True:
             if self.capture_error is not None:
                 raise RuntimeError("camera capture thread failed") from self.capture_error
@@ -181,17 +189,28 @@ class CameraBase:
                 capture_ms = self.latest_capture_ms
                 frame_index = self.latest_frame_index
                 if frame is not None and (after_frame_index is None or frame_index > after_frame_index):
+                    self.frame_timeout_count = 0
                     return frame.copy(), capture_ms, frame_index
                 self.latest_frame_ready.clear()
             if self.capture_stop.is_set():
                 raise RuntimeError("camera capture thread stopped")
             if not self.latest_frame_ready.wait(timeout):
+                self.frame_timeout_count += 1
+                capture_thread_alive = (
+                    self.capture_thread is not None and self.capture_thread.is_alive()
+                )
                 logger.warning(
-                    "waiting for camera frame timed out after %.1fs after_frame_index=%s latest_frame_index=%s",
+                    "waiting for camera frame timed out after %.1fs count=%s/%s "
+                    "after_frame_index=%s latest_frame_index=%s capture_thread_alive=%s",
                     timeout,
+                    self.frame_timeout_count,
+                    self.max_frame_timeouts,
                     after_frame_index,
                     frame_index,
+                    capture_thread_alive,
                 )
+                if self.frame_timeout_count < self.max_frame_timeouts:
+                    continue
                 raise TimeoutError("timed out waiting for camera frame")
 
     def reset_tracking(self):

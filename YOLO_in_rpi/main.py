@@ -27,22 +27,27 @@ logger = logging.getLogger(__name__)
 def setup_logging():
     level_name = os.getenv("LOG_LEVEL", "INFO").upper()
     level = getattr(logging, level_name, logging.INFO)
+    third_party_level_name = os.getenv("THIRD_PARTY_LOG_LEVEL", "WARNING").upper()
+    third_party_level = getattr(logging, third_party_level_name, logging.WARNING)
     log_path = Path(os.getenv("SYSTEM_LOG", Path(__file__).resolve().parent / "system.log"))
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
     logging.basicConfig(
         level=level,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
+        datefmt="%Y-%m-%d %H:%M:%S",
         handlers=[
             logging.StreamHandler(),
-            logging.FileHandler(log_path, mode="a", encoding="utf-8"),
+            logging.FileHandler(log_path, mode="w", encoding="utf-8"),
         ],
         force=True,
     )
+    for logger_name in ("picamera2", "picamera2.picamera2", "libcamera"):
+        logging.getLogger(logger_name).setLevel(third_party_level)
     logger.info(
-        "logging initialized level=%s file=%s",
+        "logging initialized level=%s third_party_level=%s file=%s",
         logging.getLevelName(level),
+        logging.getLevelName(third_party_level),
         log_path,
     )
 
