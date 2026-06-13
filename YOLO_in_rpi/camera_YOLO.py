@@ -100,6 +100,10 @@ class Camera(CameraBase):
         self.global_miss_count = 0
         self.last_detection_mode = "global"
         self.last_roi = None
+        self.last_local_attempted = False
+        self.last_local_candidates_found = False
+        self.last_global_attempted = False
+        self.last_global_candidates_found = False
         
         self.last_detection_count = 0
         self.last_candidate_count = 0
@@ -223,45 +227,76 @@ class Camera(CameraBase):
         self.detection_frame_count += 1
         candidates = self.detect_tracking_candidates(frame)
         find_ball, error, target = self.choose_ball(candidates)
+        self.update_tracking_counters(target)
         self.update_tracking_roi(find_ball, target)
         return floor_mask, candidates, target, find_ball, error
 
     def detect_tracking_candidates(self, frame):
+        self.reset_detection_attempt_state()
         if not self.roi_tracking_enabled:
             return self.detect_yolo_candidates(frame, mode="global")
 
         if self.should_run_global_scan():
             global_candidates = self.detect_yolo_candidates(frame, mode="global")
+            self.record_global_attempt(global_candidates)
             if global_candidates or self.tracking_roi is None:
-                self.global_miss_count = 0 if global_candidates else self.global_miss_count + 1
                 return global_candidates
 
             global_stats = self.capture_detection_stats()
             local_candidates = self.detect_local_candidates(frame, mode="global_miss_local")
+            self.record_local_attempt(local_candidates)
             self.combine_detection_stats(global_stats, self.capture_detection_stats())
             if local_candidates:
-                self.global_miss_count += 1
-                self.local_miss_count = 0
                 return local_candidates
-            self.global_miss_count += 1
             return []
 
         local_candidates = self.detect_local_candidates(frame, mode="local")
+        self.record_local_attempt(local_candidates)
         if local_candidates:
-            self.local_miss_count = 0
             return local_candidates
 
-        self.local_miss_count += 1
-        if self.local_miss_count < self.local_miss_reacquire_frames:
+        if self.local_miss_count + 1 < self.local_miss_reacquire_frames:
             return local_candidates
 
         local_stats = self.capture_detection_stats()
         global_candidates = self.detect_yolo_candidates(frame, mode="local_miss_global")
+        self.record_global_attempt(global_candidates)
         self.combine_detection_stats(local_stats, self.capture_detection_stats())
-        if global_candidates:
-            self.local_miss_count = 0
-            self.global_miss_count = 0
         return global_candidates
+
+    def reset_detection_attempt_state(self):
+        self.last_local_attempted = False
+        self.last_local_candidates_found = False
+        self.last_global_attempted = False
+        self.last_global_candidates_found = False
+
+    def record_local_attempt(self, candidates):
+        self.last_local_attempted = True
+        self.last_local_candidates_found = bool(candidates)
+
+    def record_global_attempt(self, candidates):
+        self.last_global_attempted = True
+        self.last_global_candidates_found = bool(candidates)
+
+    def update_tracking_counters(self, target):
+        target_mode = target.get("detect_mode", "") if target is not None else ""
+        local_accepted = target_mode in {"local", "global_miss_local"}
+        global_accepted = target_mode in {"global", "local_miss_global"}
+
+        if self.last_local_attempted:
+            if local_accepted:
+                self.local_miss_count = 0
+            else:
+                self.local_miss_count += 1
+
+        if self.last_global_attempted:
+            if global_accepted:
+                self.global_miss_count = 0
+            else:
+                self.global_miss_count += 1
+
+        if target is not None and global_accepted:
+            self.local_miss_count = 0
 
     def should_run_global_scan(self):
         if self.tracking_roi is None:
@@ -971,7 +1006,7 @@ class Camera(CameraBase):
                         "frame=%s processed=%s capture_ms=%.1f preprocess_ms=%.1f "
                         "inference_ms=%.1f postprocess_ms=%.1f processing_ms=%.1f "
                         "detections=%s candidates=%s find_ball=%s error=%s target=%s "
-                        "mode=%s roi=%s rejects=%s",
+                        "mode=%s roi=%s local_miss=%s global_miss=%s rejects=%s",
                         frame_index,
                         processed_count,
                         capture_ms,
@@ -986,6 +1021,8 @@ class Camera(CameraBase):
                         target.get("source") if target is not None else None,
                         self.last_detection_mode,
                         self.last_roi,
+                        self.local_miss_count,
+                        self.global_miss_count,
                         self.last_candidate_rejects,
                     )
                 yield find_ball, error, target
