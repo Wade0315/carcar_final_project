@@ -238,6 +238,16 @@ class Camera(CameraBase):
             "frame_interval": self.frame_interval,
             "camera_frame_period_ms": round(self.camera_frame_period_ms, 3),
             "capture_ms": round(capture_ms, 3),
+            "capture_gap_ms": (
+                round(self.current_capture_gap_ms, 3)
+                if self.current_capture_gap_ms is not None
+                else None
+            ),
+            "frame_age_ms": (
+                round(self.current_frame_age_ms, 3)
+                if self.current_frame_age_ms is not None
+                else None
+            ),
             "preprocess_ms": round(self.last_performance.get("preprocess_ms", 0), 3),
             "inference_ms": round(self.last_performance.get("inference_ms", 0), 3),
             "ncnn_prepare_ms": round(self.last_ncnn_performance.get("ncnn_prepare_ms", 0), 3),
@@ -656,12 +666,23 @@ class Camera(CameraBase):
                 processed_count += 1
                 if processed_count == 1 or processed_count % self.debug_frame_interval == 0:
                     logger.info(
-                        "frame=%s processed=%s capture_ms=%.1f preprocess_ms=%.1f "
+                        "frame=%s processed=%s capture_ms=%.1f capture_gap_ms=%s "
+                        "frame_age_ms=%s preprocess_ms=%.1f "
                         "inference_ms=%.1f postprocess_ms=%.1f processing_ms=%.1f "
                         "detections=%s candidates=%s find_ball=%s error=%s target=%s rejects=%s",
                         frame_index,
                         processed_count,
                         capture_ms,
+                        (
+                            "%.1f" % self.current_capture_gap_ms
+                            if self.current_capture_gap_ms is not None
+                            else None
+                        ),
+                        (
+                            "%.1f" % self.current_frame_age_ms
+                            if self.current_frame_age_ms is not None
+                            else None
+                        ),
                         self.last_performance.get("preprocess_ms", 0),
                         self.last_performance.get("inference_ms", 0),
                         self.last_performance.get("postprocess_ms", 0),

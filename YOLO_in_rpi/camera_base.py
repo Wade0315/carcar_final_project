@@ -50,7 +50,11 @@ class CameraBase:
         self.closed = False
         self.latest_frame = None
         self.latest_capture_ms = None
+        self.latest_capture_gap_ms = None
+        self.latest_capture_completed_at = None
         self.latest_frame_index = -1
+        self.current_capture_gap_ms = None
+        self.current_frame_age_ms = None
         self.latest_frame_lock = threading.Lock()
         self.latest_frame_ready = threading.Event()
         self.capture_stop = threading.Event()
@@ -151,24 +155,34 @@ class CameraBase:
 
     def capture_latest_frames(self):
         frame_index = 0
+        last_capture_completed_at = None
         try:
             while not self.capture_stop.is_set():
                 capture_started_at = time.perf_counter()
                 frame = self.picam2.capture_array()
                 frame = self.fix_orientation(frame)
-                capture_ms = (time.perf_counter() - capture_started_at) * 1000
+                capture_completed_at = time.perf_counter()
+                capture_ms = (capture_completed_at - capture_started_at) * 1000
+                capture_gap_ms = None
+                if last_capture_completed_at is not None:
+                    capture_gap_ms = (capture_completed_at - last_capture_completed_at) * 1000
+                last_capture_completed_at = capture_completed_at
                 with self.latest_frame_lock:
                     self.latest_frame = frame
                     self.latest_capture_ms = capture_ms
+                    self.latest_capture_gap_ms = capture_gap_ms
+                    self.latest_capture_completed_at = capture_completed_at
                     self.latest_frame_index = frame_index
                 self.latest_frame_ready.set()
                 if frame_index == 0:
                     logger.info("first camera frame captured capture_ms=%.1f", capture_ms)
                 elif capture_ms > self.camera_frame_period_ms * 2:
                     logger.debug(
-                        "slow camera capture frame=%s capture_ms=%.1f expected_period_ms=%.1f",
+                        "slow camera capture frame=%s capture_ms=%.1f capture_gap_ms=%s "
+                        "expected_period_ms=%.1f",
                         frame_index,
                         capture_ms,
+                        "%.1f" % capture_gap_ms if capture_gap_ms is not None else None,
                         self.camera_frame_period_ms,
                     )
                 frame_index += 1
@@ -187,9 +201,18 @@ class CameraBase:
             with self.latest_frame_lock:
                 frame = self.latest_frame
                 capture_ms = self.latest_capture_ms
+                capture_gap_ms = self.latest_capture_gap_ms
+                capture_completed_at = self.latest_capture_completed_at
                 frame_index = self.latest_frame_index
                 if frame is not None and (after_frame_index is None or frame_index > after_frame_index):
                     self.frame_timeout_count = 0
+                    retrieved_at = time.perf_counter()
+                    self.current_capture_gap_ms = capture_gap_ms
+                    self.current_frame_age_ms = (
+                        (retrieved_at - capture_completed_at) * 1000
+                        if capture_completed_at is not None
+                        else None
+                    )
                     return frame.copy(), capture_ms, frame_index
                 self.latest_frame_ready.clear()
             if self.capture_stop.is_set():
