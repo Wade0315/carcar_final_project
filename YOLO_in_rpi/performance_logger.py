@@ -11,6 +11,8 @@ PERF_LOG_FIELDS = [
     "frame_interval",
     "camera_frame_period_ms",
     "capture_ms",
+    "capture_gap_ms",
+    "frame_age_ms",
     "preprocess_ms",
     "inference_ms",
     "ncnn_prepare_ms",

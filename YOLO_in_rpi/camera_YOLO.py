@@ -10,9 +10,11 @@ from camera_base import CameraBase
 from performance_logger import PerformanceLogger
 
 logger = logging.getLogger(__name__)
-DEFAULT_MODEL_PATH = "/home/waryt/YOLO/best_ncnn_model_v5nu"
+DEFAULT_MODEL_PATH = "/home/waryt/YOLO/best_ncnn_model_v5nu_ver2_256"
+DEFAULT_LOCAL_MODEL_PATH = "/home/waryt/YOLO/best_ncnn_model_v5nu_ver2_192"
 FRAME_INTERVAL = 1
 DEFAULT_IMAGE_SIZE = 256
+DEFAULT_LOCAL_IMAGE_SIZE = 192
 DEFAULT_EXPOSURE_TIME_US = 5000
 HEAD_CLOSE_AREA = int(os.getenv("YOLO_HEAD_CLOSE_AREA", "25000"))
 BALL_CLOSE_AREA = int(os.getenv("YOLO_BALL_CLOSE_AREA", "60000"))
@@ -83,8 +85,8 @@ class Camera(CameraBase):
 
         self.roi_tracking_enabled = env_bool("YOLO_ROI_TRACKING", True)
         self.global_scan_interval = max(1, int(os.getenv("YOLO_GLOBAL_SCAN_INTERVAL", "5")))
-        self.local_model_path = os.getenv("YOLO_LOCAL_MODEL", self.model_path)
-        self.local_imgsz = int(os.getenv("YOLO_LOCAL_IMGSZ", self.imgsz))
+        self.local_model_path = os.getenv("YOLO_LOCAL_MODEL", DEFAULT_LOCAL_MODEL_PATH)
+        self.local_imgsz = int(os.getenv("YOLO_LOCAL_IMGSZ", DEFAULT_LOCAL_IMAGE_SIZE))
         self.local_min_roi_side = int(os.getenv("YOLO_LOCAL_MIN_ROI_SIDE", "120"))
         self.local_max_roi_side = int(os.getenv("YOLO_LOCAL_MAX_ROI_SIDE", str(min(self.width, self.height))))
         self.local_roi_small_area_ratio = float(os.getenv("YOLO_LOCAL_ROI_SMALL_AREA_RATIO", "0.02"))
@@ -526,6 +528,16 @@ class Camera(CameraBase):
             "frame_interval": self.frame_interval,
             "camera_frame_period_ms": round(self.camera_frame_period_ms, 3),
             "capture_ms": round(capture_ms, 3),
+            "capture_gap_ms": (
+                round(self.current_capture_gap_ms, 3)
+                if self.current_capture_gap_ms is not None
+                else None
+            ),
+            "frame_age_ms": (
+                round(self.current_frame_age_ms, 3)
+                if self.current_frame_age_ms is not None
+                else None
+            ),
             "preprocess_ms": round(self.last_performance.get("preprocess_ms", 0), 3),
             "inference_ms": round(self.last_performance.get("inference_ms", 0), 3),
             "ncnn_prepare_ms": round(self.last_ncnn_performance.get("ncnn_prepare_ms", 0), 3),
@@ -1003,13 +1015,24 @@ class Camera(CameraBase):
                 processed_count += 1
                 if processed_count == 1 or processed_count % self.debug_frame_interval == 0:
                     logger.info(
-                        "frame=%s processed=%s capture_ms=%.1f preprocess_ms=%.1f "
+                        "frame=%s processed=%s capture_ms=%.1f capture_gap_ms=%s "
+                        "frame_age_ms=%s preprocess_ms=%.1f "
                         "inference_ms=%.1f postprocess_ms=%.1f processing_ms=%.1f "
                         "detections=%s candidates=%s find_ball=%s error=%s target=%s "
                         "mode=%s roi=%s local_miss=%s global_miss=%s rejects=%s",
                         frame_index,
                         processed_count,
                         capture_ms,
+                        (
+                            "%.1f" % self.current_capture_gap_ms
+                            if self.current_capture_gap_ms is not None
+                            else None
+                        ),
+                        (
+                            "%.1f" % self.current_frame_age_ms
+                            if self.current_frame_age_ms is not None
+                            else None
+                        ),
                         self.last_performance.get("preprocess_ms", 0),
                         self.last_performance.get("inference_ms", 0),
                         self.last_performance.get("postprocess_ms", 0),

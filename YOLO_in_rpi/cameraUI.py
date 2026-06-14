@@ -43,6 +43,7 @@ class Camera(YOLOCamera):
 
     def visualize_frame(self, frame, floor_mask, candidates, target, error):
         self.draw_center_line(frame)
+        self.draw_roi(frame)
         self.draw_candidates(frame, candidates)
         if target is not None:
             self.draw_target(frame, target)
@@ -50,6 +51,25 @@ class Camera(YOLOCamera):
 
     def draw_center_line(self, frame):
         cv2.line(frame, (self.width // 2, 0), (self.width // 2, self.height), (0, 255, 255), 1)
+
+    def draw_roi(self, frame):
+        if not self.last_roi:
+            return
+
+        x1, y1, x2, y2 = self.last_roi
+        color = (0, 165, 255)
+        cv2.rectangle(frame, (x1, y1), (x2 - 1, y2 - 1), color, 2)
+
+        label = "ROI"
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale = 0.42
+        thickness = 1
+        text_w, text_h = cv2.getTextSize(label, font, scale, thickness)[0]
+        label_x = min(max(0, x1 + 3), max(0, self.width - text_w - 2))
+        label_y = max(text_h + 3, y1 + text_h + 4)
+        if label_y >= y2:
+            label_y = min(self.height - 3, y2 + text_h + 4)
+        cv2.putText(frame, label, (label_x, label_y), font, scale, color, thickness)
 
     def draw_candidates(self, frame, candidates):
         for ball in candidates:
@@ -206,9 +226,9 @@ if __name__ == "__main__":
     setup_logging()
     with Camera() as tracker:
         #tracker.single_test()
-        tracker.capture_images()
-        # for find_ball, error, target in tracker.streaming():
-        #     if target is not None:
-        #         logger.info("find_ball=%s error=%s area=%s", find_ball, error, target["area"])
-        #     else:
-        #         logger.info("find_ball=%s error=%s", find_ball, error)
+        #tracker.capture_images()
+        for find_ball, error, target in tracker.streaming():
+            if target is not None:
+                logger.info("find_ball=%s error=%s area=%s", find_ball, error, target["area"])
+            else:
+                logger.info("find_ball=%s error=%s", find_ball, error)
