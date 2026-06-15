@@ -82,6 +82,7 @@ class Camera(CameraBase):
         self.target_class = os.getenv("YOLO_CLASS", target_class or "").strip().lower()
         self.iou_threshold = float(os.getenv("YOLO_IOU", "0.45"))
         self.class_names = self.load_class_names(self.model_path)
+        self.ncnn_threads = max(1, int(os.getenv("YOLO_NCNN_THREADS", "3")))
 
         self.roi_tracking_enabled = env_bool("YOLO_ROI_TRACKING", True)
         self.global_scan_interval = max(1, int(os.getenv("YOLO_GLOBAL_SCAN_INTERVAL", "5")))
@@ -127,7 +128,8 @@ class Camera(CameraBase):
         logger.info(
             "tracking config model=%s confidence=%.3f iou=%.3f target_class=%s "
             "camera_fps=%.1f frame_interval=%s camera_frame_period_ms=%.1f imgsz=%s "
-            "exposure_time_us=%s head_close_area=%s ball_close_area=%s debug_frame_interval=%s",
+            "exposure_time_us=%s ncnn_threads=%s head_close_area=%s ball_close_area=%s "
+            "debug_frame_interval=%s",
             self.model_path,
             self.confidence,
             self.iou_threshold,
@@ -137,6 +139,7 @@ class Camera(CameraBase):
             self.camera_frame_period_ms,
             self.imgsz,
             self.exposure_time_us,
+            self.ncnn_threads,
             HEAD_CLOSE_AREA,
             BALL_CLOSE_AREA,
             self.debug_frame_interval,
@@ -178,7 +181,7 @@ class Camera(CameraBase):
 
         net = ncnn.Net()
         net.opt.use_vulkan_compute = False
-        net.opt.num_threads = 4
+        net.opt.num_threads = self.ncnn_threads
         net.opt.use_packing_layout = True
         net.opt.use_fp16_storage = True
 

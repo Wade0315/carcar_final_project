@@ -26,6 +26,13 @@ class CameraBase:
         self.camera_fps = camera_fps
         self.exposure_time_us = exposure_time_us
         self.camera_frame_period_ms = self.frame_interval / self.camera_fps * 1000
+        self.camera_frame_duration_us = int(round(1_000_000 / self.camera_fps))
+        self.lock_frame_duration = os.getenv("CAMERA_LOCK_FRAME_DURATION", "1").strip().lower() not in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }
         self.frame_timeout_seconds = float(os.getenv("CAMERA_FRAME_TIMEOUT_SECONDS", "5"))
         self.max_frame_timeouts = max(1, int(os.getenv("CAMERA_MAX_FRAME_TIMEOUTS", "3")))
         self.frame_timeout_count = 0
@@ -62,13 +69,16 @@ class CameraBase:
         self.capture_thread = None
         logger.info(
             "camera base config width=%s height=%s flip_code=%s frame_interval=%s "
-            "camera_fps=%s exposure_time_us=%s frame_timeout_seconds=%s max_frame_timeouts=%s",
+            "camera_fps=%s exposure_time_us=%s frame_duration_us=%s lock_frame_duration=%s "
+            "frame_timeout_seconds=%s max_frame_timeouts=%s",
             self.width,
             self.height,
             self.flip_code,
             self.frame_interval,
             self.camera_fps,
             self.exposure_time_us,
+            self.camera_frame_duration_us,
+            self.lock_frame_duration,
             self.frame_timeout_seconds,
             self.max_frame_timeouts,
         )
@@ -82,9 +92,16 @@ class CameraBase:
             ) from exc
 
         self.picam2 = Picamera2()
+        camera_controls = {"FrameRate": self.camera_fps}
+        if self.lock_frame_duration:
+            camera_controls["FrameDurationLimits"] = (
+                self.camera_frame_duration_us,
+                self.camera_frame_duration_us,
+            )
+
         config = self.picam2.create_video_configuration(
             main={"format": "RGB888", "size": (self.width, self.height)},
-            controls={"FrameRate": self.camera_fps},
+            controls=camera_controls,
             buffer_count=buffer_count,
         )
         self.picam2.configure(config)
@@ -92,10 +109,12 @@ class CameraBase:
         self.closed = False
 
         logger.info(
-            "camera activating size=%sx%s fps=%s buffer_count=%s warmup_seconds=%s",
+            "camera activating size=%sx%s fps=%s frame_duration_us=%s buffer_count=%s "
+            "warmup_seconds=%s",
             self.width,
             self.height,
             self.camera_fps,
+            self.camera_frame_duration_us if self.lock_frame_duration else None,
             buffer_count,
             warmup_seconds,
         )
@@ -120,6 +139,11 @@ class CameraBase:
             "AeEnable": False,
             "AwbEnable": False,
         }
+        if self.lock_frame_duration:
+            controls["FrameDurationLimits"] = (
+                self.camera_frame_duration_us,
+                self.camera_frame_duration_us,
+            )
         if self.exposure_time_us is not None:
             controls["ExposureTime"] = self.exposure_time_us
         if analogue_gain is not None:
@@ -129,9 +153,11 @@ class CameraBase:
 
         self.picam2.set_controls(controls)
         logger.info(
-            "lock camera ExposureTime=%s us (measured=%s us) AnalogueGain=%s (measured=%s) ColourGains=%s",
+            "lock camera ExposureTime=%s us (measured=%s us) FrameDurationLimits=%s "
+            "AnalogueGain=%s (measured=%s) ColourGains=%s",
             self.exposure_time_us,
             measured_exposure_time,
+            controls.get("FrameDurationLimits"),
             analogue_gain,
             measured_analogue_gain,
             colour_gains,
