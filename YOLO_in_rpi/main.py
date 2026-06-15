@@ -15,7 +15,7 @@ class Status(Enum):
     IDLE = 4
 
 FOUND_TOLERANCE = 2         
-CLOSE_TRACK = 20
+CLOSE_TRACK = 22
 WARMUP_SECONDS = float(os.getenv("YOLO_WARMUP_SECONDS", "2"))
 WARMUP_STABLE_FRAMES = int(os.getenv("YOLO_WARMUP_STABLE_FRAMES", "5"))
 MAX_INFERENCE_MS = float(os.getenv("YOLO_MAX_INFERENCE_MS", "800"))
@@ -199,6 +199,8 @@ def main():
                         if last_sent_state != state:
                             last_sent_state = state
                             logger.info("%s", state.name)
+                            if state == Status.CLOSE_ENOUGH:
+                                time.sleep(18)
 
                 else:
                     found_count = 0

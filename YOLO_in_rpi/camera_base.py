@@ -49,7 +49,7 @@ class CameraBase:
         self.target_y = None
         self.last_error = None
         self.lost_count = 0
-        self.max_lost_frames = 5
+        self.max_lost_frames = 2
         self.max_tracking_distance = 50
         self.target_area_dominance_ratio = max(
             1.0,

@@ -13,6 +13,7 @@ YOLO/shuttle.v3i.yolov5pytorch/
 YOLO/stock/
 YOLO/runs/
 YOLO/runs-v5n/
+YOLO/zip/
 
 
 *.txt
