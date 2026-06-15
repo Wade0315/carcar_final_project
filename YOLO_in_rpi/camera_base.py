@@ -464,11 +464,11 @@ class CameraBase:
             self.candidate_selection_area(target),
             self.previous_target_distance_sq(target),
         )
-        return target
+        return self.mark_candidate_selection(target, "locked_distance")
 
     def choose_tracking_candidate(self, candidates):
         if len(candidates) == 1:
-            return candidates[0]
+            return self.mark_candidate_selection(candidates[0], "single_candidate")
 
         by_area = sorted(
             candidates,
@@ -488,7 +488,7 @@ class CameraBase:
                 second_largest_area,
                 largest_area / second_largest_area,
             )
-            return largest
+            return self.mark_candidate_selection(largest, "area_dominance")
 
         target = min(
             candidates,
@@ -500,7 +500,7 @@ class CameraBase:
             self.candidate_selection_area(target),
             self.candidate_reference_distance_sq(target),
         )
-        return target
+        return self.mark_candidate_selection(target, "reference_distance")
 
     def is_grouped_candidate(self, candidate):
         return (
@@ -563,6 +563,16 @@ class CameraBase:
             (candidate["target_cx"] - self.target_x) ** 2
             + (candidate["target_cy"] - self.target_y) ** 2
         )
+
+    def mark_candidate_selection(self, candidate, mode):
+        candidate["tracking_tier"] = self.candidate_tracking_tier(candidate)
+        candidate["selection_mode"] = mode
+        candidate["selection_area"] = self.candidate_selection_area(candidate)
+        if self.has_locked_target():
+            candidate["selection_distance_sq"] = self.previous_target_distance_sq(candidate)
+        else:
+            candidate["selection_distance_sq"] = self.candidate_reference_distance_sq(candidate)
+        return candidate
 
     def close(self):
         if self.closed:

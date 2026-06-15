@@ -63,9 +63,14 @@ def describe_target(target):
         return ""
 
     return (
+        " tier=%s selection_mode=%s selection_area=%s selection_distance_sq=%s"
         " source=%s area=%s grouped_area=%s grouped_cx=%s grouped_cy=%s"
         " ball_area=%s ball_cx=%s ball_cy=%s target_cx=%s target_cy=%s close_enough=%s"
         % (
+            target.get("tracking_tier"),
+            target.get("selection_mode"),
+            target.get("selection_area"),
+            target.get("selection_distance_sq"),
             target.get("source"),
             target.get("area"),
             target.get("grouped_area"),

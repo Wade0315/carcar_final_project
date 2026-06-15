@@ -21,7 +21,13 @@ class Camera(YOLOCamera):
 
     def process_frame(self, frame):
         floor_mask, candidates, target, find_ball, error = self.detect_frame(frame)
-        logger.info("debug candidates=%s find_ball=%s error=%s", len(candidates), find_ball, error)
+        logger.info(
+            "debug candidates=%s find_ball=%s error=%s%s",
+            len(candidates),
+            find_ball,
+            error,
+            self.describe_debug_target(target),
+        )
         yolo_mask = self.build_yolo_mask(frame, candidates)
         self.visualize_frame(frame, floor_mask, candidates, target, error)
         return frame, floor_mask, yolo_mask, find_ball, error, target
@@ -40,6 +46,7 @@ class Camera(YOLOCamera):
             (0, 255, 0),
             2,
         )
+        self.draw_target_label(frame, target)
 
     def visualize_frame(self, frame, floor_mask, candidates, target, error):
         self.draw_center_line(frame)
@@ -84,7 +91,9 @@ class Camera(YOLOCamera):
 
     def draw_candidate_label(self, frame, candidate, color):
         x1, y1, x2, y2 = candidate["bbox"]
-        label = f"{candidate['class_name']} {candidate['confidence']:.2f}"
+        tier = self.short_candidate_tier(candidate)
+        area = self.candidate_selection_area(candidate)
+        label = f"{tier} a={area} c={candidate['confidence']:.2f}"
         font = cv2.FONT_HERSHEY_SIMPLEX
         scale = 0.34
         thickness = 1
@@ -101,6 +110,36 @@ class Camera(YOLOCamera):
 
         cv2.putText(frame, label, (label_x, label_y), font, scale, color, thickness)
 
+    def draw_target_label(self, frame, target):
+        label = (
+            f"target {target.get('tracking_tier') or self.candidate_tracking_tier(target)} "
+            f"{target.get('selection_mode') or '?'} "
+            f"a={target.get('selection_area') or self.candidate_selection_area(target)} "
+            f"d2={target.get('selection_distance_sq')}"
+        )
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale = 0.36
+        thickness = 1
+        text_w, text_h = cv2.getTextSize(label, font, scale, thickness)[0]
+
+        x1, y1, x2, y2 = target["bbox"]
+        label_x = x1
+        label_y = max(text_h + 2, y1 - 6)
+        if label_x + text_w >= self.width:
+            label_x = max(0, self.width - text_w - 2)
+        if label_y - text_h < 0:
+            label_y = min(self.height - 2, y2 + text_h + 6)
+
+        cv2.putText(frame, label, (label_x, label_y), font, scale, (0, 255, 0), thickness)
+
+    def short_candidate_tier(self, candidate):
+        tier = self.candidate_tracking_tier(candidate)
+        if tier == "grouped":
+            return "grp"
+        if tier == "head_only":
+            return "head"
+        return "body"
+
     def draw_error_text(self, frame, error):
         cv2.putText(
             frame,
@@ -110,6 +149,26 @@ class Camera(YOLOCamera):
             0.5,
             (0, 255, 0) if error is not None else (0, 255, 255),
             1,
+        )
+
+    def describe_debug_target(self, target):
+        if target is None:
+            return ""
+        return (
+            " tier=%s selection_mode=%s selection_area=%s selection_distance_sq=%s"
+            " source=%s area=%s grouped_area=%s ball_area=%s target=(%s,%s)"
+            % (
+                target.get("tracking_tier"),
+                target.get("selection_mode"),
+                target.get("selection_area"),
+                target.get("selection_distance_sq"),
+                target.get("source"),
+                target.get("area"),
+                target.get("grouped_area"),
+                target.get("ball_area"),
+                target.get("target_cx"),
+                target.get("target_cy"),
+            )
         )
 
     def streaming(self):
@@ -125,14 +184,24 @@ class Camera(YOLOCamera):
                 floor_mask, candidates, target, find_ball, error = self.detect_frame(raw_frame)
                 processing_ms = (time.perf_counter() - processing_started_at) * 1000
                 self.record_performance(frame_index, capture_ms, processing_ms, find_ball, error)
-                logger.info("debug candidates=%s find_ball=%s error=%s", len(candidates), find_ball, error)
+                logger.info(
+                    "debug candidates=%s find_ball=%s error=%s%s",
+                    len(candidates),
+                    find_ball,
+                    error,
+                    self.describe_debug_target(target),
+                )
                 processed_frame = raw_frame.copy()
                 try:
                     self.visualize_frame(processed_frame, floor_mask, candidates, target, error)
                 except Exception:
                     logger.exception("failed to visualize frame")
-                area = target["area"] if target is not None else None
-                logger.info("find_ball=%s error=%s area=%s", find_ball, error, area)
+                logger.info(
+                    "find_ball=%s error=%s%s",
+                    find_ball,
+                    error,
+                    self.describe_debug_target(target),
+                )
                 yield find_ball, error, target
 
                 if processed_frame is not None:
@@ -157,8 +226,12 @@ class Camera(YOLOCamera):
         processing_started_at = time.perf_counter()
         processed_frame, floor_mask, yolo_mask, find_ball, error, target = self.process_frame(detection_frame)
         processing_ms = (time.perf_counter() - processing_started_at) * 1000
-        area = target["area"] if target is not None else None
-        logger.info("find_ball=%s error=%s area=%s", find_ball, error, area)
+        logger.info(
+            "find_ball=%s error=%s%s",
+            find_ball,
+            error,
+            self.describe_debug_target(target),
+        )
 
         if filename is None:
             timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -229,6 +302,11 @@ if __name__ == "__main__":
         #tracker.capture_images()
         for find_ball, error, target in tracker.streaming():
             if target is not None:
-                logger.info("find_ball=%s error=%s area=%s", find_ball, error, target["area"])
+                logger.info(
+                    "find_ball=%s error=%s%s",
+                    find_ball,
+                    error,
+                    tracker.describe_debug_target(target),
+                )
             else:
                 logger.info("find_ball=%s error=%s", find_ball, error)
