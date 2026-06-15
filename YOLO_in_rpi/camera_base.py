@@ -51,6 +51,21 @@ class CameraBase:
         self.lost_count = 0
         self.max_lost_frames = 5
         self.max_tracking_distance = 50
+        self.target_area_dominance_ratio = max(
+            1.0,
+            float(os.getenv("YOLO_TARGET_AREA_DOMINANCE_RATIO", "1.4")),
+        )
+        self.head_only_min_area_ratio = max(
+            0.0,
+            float(os.getenv("YOLO_HEAD_ONLY_MIN_AREA_RATIO", "0.01")),
+        )
+        default_head_only_min_area = int(
+            self.width * self.height * self.head_only_min_area_ratio
+        )
+        self.head_only_min_area = max(
+            1,
+            int(os.getenv("YOLO_HEAD_ONLY_MIN_AREA", str(default_head_only_min_area))),
+        )
         self.head_end_band_ratio = 0.25
         self.head_width_ratio = 0.85
         self.picam2 = None
@@ -70,7 +85,8 @@ class CameraBase:
         logger.info(
             "camera base config width=%s height=%s flip_code=%s frame_interval=%s "
             "camera_fps=%s exposure_time_us=%s frame_duration_us=%s lock_frame_duration=%s "
-            "frame_timeout_seconds=%s max_frame_timeouts=%s",
+            "frame_timeout_seconds=%s max_frame_timeouts=%s area_dominance_ratio=%.2f "
+            "head_only_min_area=%s head_only_min_area_ratio=%.4f",
             self.width,
             self.height,
             self.flip_code,
@@ -81,6 +97,9 @@ class CameraBase:
             self.lock_frame_duration,
             self.frame_timeout_seconds,
             self.max_frame_timeouts,
+            self.target_area_dominance_ratio,
+            self.head_only_min_area,
+            self.head_only_min_area_ratio,
         )
 
     def open_camera(self, warmup_seconds=1, buffer_count=3, lock_controls=True):
@@ -308,22 +327,19 @@ class CameraBase:
         return floor_mask
 
     def choose_ball(self, candidate):
-        if len(candidate) > 0:
-            tracking_candidates = self.select_tracking_candidates(candidate)
+        candidates = candidate or []
+        target = None
+        if self.has_locked_target():
+            tracking_candidates = self.select_locked_tracking_candidates(candidates)
+            if tracking_candidates:
+                target = self.choose_locked_tracking_candidate(tracking_candidates)
+        else:
+            tracking_candidates = self.select_tracking_candidates(candidates)
+            if tracking_candidates:
+                target = self.choose_tracking_candidate(tracking_candidates)
 
-            if self.target_x is None:
-                target = min(tracking_candidates, key=lambda b: abs(b["error"]))
-                distance = 0
-            else:
-                target = min(
-                    tracking_candidates,
-                    key=lambda b: (b["target_cx"] - self.target_x) ** 2
-                    + (b["target_cy"] - self.target_y) ** 2
-                )
-                distance = (
-                    (target["target_cx"] - self.target_x) ** 2
-                    + (target["target_cy"] - self.target_y) ** 2
-                ) ** 0.5
+        if target is not None:
+            distance = self.previous_target_distance(target)
 
             if self.target_x is not None and distance > self.max_tracking_distance:
                 self.lost_count += 1
@@ -338,10 +354,17 @@ class CameraBase:
                     return True, self.last_error, None
 
                 logger.debug(
-                    "target jumped %.1f px; reacquire candidate after lost_count=%s",
+                    "target jumped %.1f px; reset lock and reacquire after lost_count=%s",
                     distance,
                     self.lost_count,
                 )
+                self.target_x = None
+                self.target_y = None
+                tracking_candidates = self.select_tracking_candidates(candidates)
+                if not tracking_candidates:
+                    self.last_error = None
+                    return False, None, None
+                target = self.choose_tracking_candidate(tracking_candidates)
 
             self.target_x = target["target_cx"]
             self.target_y = target["target_cy"]
@@ -349,10 +372,12 @@ class CameraBase:
             self.last_error = error
             self.lost_count = 0
             logger.debug(
-                "target selected source=%s class=%s confidence=%.3f bbox=%s error=%s",
+                "target selected tier=%s source=%s class=%s confidence=%.3f area=%s bbox=%s error=%s",
+                self.candidate_tracking_tier(target),
                 target.get("source"),
                 target.get("class_name"),
                 target.get("confidence", 0),
+                self.candidate_selection_area(target),
                 target.get("bbox"),
                 error,
             )
@@ -374,11 +399,170 @@ class CameraBase:
         self.last_error = None
         return False, None, None
 
+    def has_locked_target(self):
+        return self.target_x is not None and self.target_y is not None
+
     def select_tracking_candidates(self, candidates):
-        head_candidates = [candidate for candidate in candidates if candidate.get("is_head")]
+        grouped_candidates = [
+            candidate for candidate in candidates
+            if self.is_grouped_candidate(candidate)
+        ]
+        if grouped_candidates:
+            return grouped_candidates
+
+        head_candidates = [
+            candidate for candidate in candidates
+            if self.is_qualified_head_only_candidate(candidate)
+        ]
         if head_candidates:
             return head_candidates
-        return candidates
+
+        body_candidates = [
+            candidate for candidate in candidates
+            if not candidate.get("is_head")
+        ]
+        if body_candidates:
+            return body_candidates
+
+        if candidates:
+            logger.debug(
+                "discard candidates: no grouped/body candidates and no head-only area >= %s",
+                self.head_only_min_area,
+            )
+        return []
+
+    def select_locked_tracking_candidates(self, candidates):
+        tracking_candidates = [
+            candidate for candidate in candidates
+            if (
+                self.is_grouped_candidate(candidate)
+                or not candidate.get("is_head")
+                or self.is_qualified_head_only_candidate(candidate)
+            )
+        ]
+        if tracking_candidates:
+            return tracking_candidates
+
+        if candidates:
+            logger.debug(
+                "discard locked candidates: only head-only candidates below area %s",
+                self.head_only_min_area,
+            )
+        return []
+
+    def choose_locked_tracking_candidate(self, candidates):
+        target = min(
+            candidates,
+            key=lambda candidate: (
+                self.previous_target_distance_sq(candidate),
+                -self.candidate_selection_area(candidate),
+            ),
+        )
+        logger.debug(
+            "target selected by locked distance tier=%s area=%s distance_sq=%.1f",
+            self.candidate_tracking_tier(target),
+            self.candidate_selection_area(target),
+            self.previous_target_distance_sq(target),
+        )
+        return target
+
+    def choose_tracking_candidate(self, candidates):
+        if len(candidates) == 1:
+            return candidates[0]
+
+        by_area = sorted(
+            candidates,
+            key=lambda candidate: self.candidate_selection_area(candidate),
+            reverse=True,
+        )
+        largest = by_area[0]
+        second_largest = by_area[1]
+        largest_area = self.candidate_selection_area(largest)
+        second_largest_area = max(1, self.candidate_selection_area(second_largest))
+
+        if largest_area >= second_largest_area * self.target_area_dominance_ratio:
+            logger.debug(
+                "target selected by area dominance tier=%s largest_area=%s second_area=%s ratio=%.2f",
+                self.candidate_tracking_tier(largest),
+                largest_area,
+                second_largest_area,
+                largest_area / second_largest_area,
+            )
+            return largest
+
+        target = min(
+            candidates,
+            key=lambda candidate: self.candidate_reference_distance_sq(candidate),
+        )
+        logger.debug(
+            "target selected by reference distance tier=%s area=%s distance_sq=%.1f",
+            self.candidate_tracking_tier(target),
+            self.candidate_selection_area(target),
+            self.candidate_reference_distance_sq(target),
+        )
+        return target
+
+    def is_grouped_candidate(self, candidate):
+        return (
+            candidate.get("is_head")
+            and candidate.get("grouped_area") is not None
+            and candidate.get("ball_area") is not None
+        )
+
+    def is_qualified_head_only_candidate(self, candidate):
+        return (
+            candidate.get("is_head")
+            and not self.is_grouped_candidate(candidate)
+            and self.candidate_selection_area(candidate) >= self.head_only_min_area
+        )
+
+    def candidate_tracking_tier(self, candidate):
+        if self.is_grouped_candidate(candidate):
+            return "grouped"
+        if candidate.get("is_head"):
+            return "head_only"
+        return "body_only"
+
+    def candidate_selection_area(self, candidate):
+        if self.is_grouped_candidate(candidate):
+            return candidate.get("grouped_area") or candidate.get("area") or 0
+        if candidate.get("is_head"):
+            return candidate.get("area") or 0
+        return candidate.get("ball_area") or candidate.get("area") or 0
+
+    def candidate_reference_distance_sq(self, candidate):
+        if self.target_x is not None and self.target_y is not None:
+            reference_x = self.target_x
+            reference_y = self.target_y
+            point_x = candidate["target_cx"]
+            point_y = candidate["target_cy"]
+        else:
+            reference_x = self.width / 2
+            reference_y = self.height / 2
+            point_x, point_y = self.candidate_center_point(candidate)
+
+        return (point_x - reference_x) ** 2 + (point_y - reference_y) ** 2
+
+    def candidate_center_point(self, candidate):
+        if self.is_grouped_candidate(candidate):
+            return (
+                candidate.get("grouped_cx") or candidate["target_cx"],
+                candidate.get("grouped_cy") or candidate["target_cy"],
+            )
+        return candidate["target_cx"], candidate["target_cy"]
+
+    def previous_target_distance(self, candidate):
+        if self.target_x is None or self.target_y is None:
+            return 0
+        return self.previous_target_distance_sq(candidate) ** 0.5
+
+    def previous_target_distance_sq(self, candidate):
+        if self.target_x is None or self.target_y is None:
+            return 0
+        return (
+            (candidate["target_cx"] - self.target_x) ** 2
+            + (candidate["target_cy"] - self.target_y) ** 2
+        )
 
     def close(self):
         if self.closed:
