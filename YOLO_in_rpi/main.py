@@ -1,6 +1,10 @@
 import os
 import logging
+import select
+import sys
+import termios
 import time
+import tty
 from enum import Enum
 from pathlib import Path
 import arduino
@@ -99,6 +103,43 @@ def describe_target(target):
         )
     )
 
+class QuitKeyWatcher:
+    def __init__(self, quit_key="q"):
+        self.quit_key = quit_key
+        self.enabled = False
+        self.old_settings = None
+
+    def __enter__(self):
+        if sys.stdin.isatty():
+            self.old_settings = termios.tcgetattr(sys.stdin)
+            tty.setcbreak(sys.stdin.fileno())
+            self.enabled = True
+        else:
+            logger.warning("stdin is not a terminal; press Ctrl+C to stop")
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.enabled and self.old_settings is not None:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self.old_settings)
+
+    def pressed(self):
+        if not self.enabled:
+            return False
+
+        readable, _, _ = select.select([sys.stdin], [], [], 0)
+        if not readable:
+            return False
+
+        key = sys.stdin.read(1)
+        return key.lower() == self.quit_key
+
+def send_init(mega):
+    if mega is None:
+        return
+
+    mega.send(Status.INIT.value)
+    logger.info("%s", Status.INIT.name)
+
 def main():
 
     found_count = 0
@@ -107,7 +148,7 @@ def main():
     mega = None
 
     try:
-        with camera.Camera() as cam:
+        with QuitKeyWatcher() as quit_key, camera.Camera() as cam:
             state = Status.NOT_FOUND
             mega = arduino.Arduino()
             #mega.send(state.value)
@@ -135,6 +176,10 @@ def main():
             )
 
             for ball_detected, error, target in cam.streaming():
+                if quit_key.pressed():
+                    send_init(mega)
+                    break
+
                 mega.receive()
                 inference_ms = cam.last_performance.get("inference_ms", float("inf"))
                 if inference_ms <= MAX_INFERENCE_MS:
