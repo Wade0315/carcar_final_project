@@ -12,10 +12,16 @@ class Status(Enum):
     NOT_FOUND = 1
     CLOSE_ENOUGH = 2
     OUT_OF_BOUND = 3
-    IDLE = 4
+    INIT = 4
+    NOHEAD = 5
+    IDLE = 6
 
 FOUND_TOLERANCE = 2         
 CLOSE_TRACK = 22
+ARM_CATCH_TIME = 20
+NOHEAD_AREA = int(os.getenv("YOLO_NOHEAD_AREA", "5000"))
+NOHEAD_SLEEP_TIME = float(os.getenv("YOLO_NOHEAD_SLEEP_TIME", "0.5"))
+NOHEAD_TOLERANCE = max(1, int(os.getenv("YOLO_NOHEAD_TOLERANCE", "3")))
 WARMUP_SECONDS = float(os.getenv("YOLO_WARMUP_SECONDS", "2"))
 WARMUP_STABLE_FRAMES = int(os.getenv("YOLO_WARMUP_STABLE_FRAMES", "5"))
 MAX_INFERENCE_MS = float(os.getenv("YOLO_MAX_INFERENCE_MS", "800"))
@@ -58,13 +64,20 @@ def has_target(target):
 def is_close_enough_target(target):
     return bool(target and target.get("close_enough"))
 
+def is_close_nohead_target(target):
+    if not target or target.get("is_head"):
+        return False
+
+    area = target.get("ball_area") or target.get("area") or 0
+    return area >= NOHEAD_AREA
+
 def describe_target(target):
     if not has_target(target):
         return ""
 
     return (
         " tier=%s selection_mode=%s selection_area=%s selection_distance_sq=%s"
-        " source=%s area=%s grouped_area=%s grouped_cx=%s grouped_cy=%s"
+        " source=%s is_head=%s area=%s grouped_area=%s grouped_cx=%s grouped_cy=%s"
         " ball_area=%s ball_cx=%s ball_cy=%s target_cx=%s target_cy=%s close_enough=%s"
         % (
             target.get("tracking_tier"),
@@ -72,6 +85,7 @@ def describe_target(target):
             target.get("selection_area"),
             target.get("selection_distance_sq"),
             target.get("source"),
+            target.get("is_head"),
             target.get("area"),
             target.get("grouped_area"),
             target.get("grouped_cx"),
@@ -88,6 +102,7 @@ def describe_target(target):
 def main():
 
     found_count = 0
+    nohead_count = 0
     last_sent_state = None
     mega = None
 
@@ -102,9 +117,12 @@ def main():
             slow_inference_count = 0
             controls_enabled = False
             logger.info(
-                "control config found_tolerance=%s close_track=%s",
+                "control config found_tolerance=%s close_track=%s nohead_area=%s "
+                "nohead_tolerance=%s",
                 FOUND_TOLERANCE,
                 CLOSE_TRACK,
+                NOHEAD_AREA,
+                NOHEAD_TOLERANCE,
             )
             logger.info(
                 "warming up YOLO for at least %.1f seconds; waiting for %s consecutive "
@@ -151,6 +169,7 @@ def main():
                     controls_ready = time.monotonic() >= warmup_ends_at and inference_ready
                 if not controls_ready:
                     found_count = 0
+                    nohead_count = 0
                     state = Status.NOT_FOUND
                     logger.debug(
                         "controls blocked elapsed_warmup=%s stable_inference=%s/%s "
@@ -179,8 +198,31 @@ def main():
                         continue
 
                     if error is None:
-                        state = Status.IDLE
+                        nohead_count = 0
+                        state = Status.NOT_FOUND
+                    elif is_close_nohead_target(target):
+                        nohead_count += 1
+                        if nohead_count >= NOHEAD_TOLERANCE:
+                            state = Status.NOHEAD
+                            logger.info(
+                                "%s error=%s nohead_count=%s/%s%s",
+                                state.name,
+                                error,
+                                nohead_count,
+                                NOHEAD_TOLERANCE,
+                                describe_target(target),
+                            )
+                        else:
+                            state = Status.TRACK
+                            logger.info(
+                                "NOHEAD pending error=%s nohead_count=%s/%s%s",
+                                error,
+                                nohead_count,
+                                NOHEAD_TOLERANCE,
+                                describe_target(target),
+                            )
                     elif abs(error) <= CLOSE_TRACK:
+                        nohead_count = 0
                         if is_close_enough_target(target) :
                             state = Status.CLOSE_ENOUGH
                             logger.info("%s error=%s%s", state.name, error, describe_target(target))
@@ -188,6 +230,7 @@ def main():
                             state = Status.TRACK
                             logger.info("%s error=%s%s", state.name, error, describe_target(target))
                     else:
+                        nohead_count = 0
                         state = Status.TRACK
 
                     if state == Status.TRACK:
@@ -200,10 +243,13 @@ def main():
                             last_sent_state = state
                             logger.info("%s", state.name)
                             if state == Status.CLOSE_ENOUGH:
-                                time.sleep(18)
+                                time.sleep(ARM_CATCH_TIME)
+                            elif state == Status.NOHEAD:
+                                time.sleep(NOHEAD_SLEEP_TIME)
 
                 else:
                     found_count = 0
+                    nohead_count = 0
                     state = Status.NOT_FOUND
                     mega.send(state.value)
                     if last_sent_state != state:
