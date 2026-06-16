@@ -290,6 +290,9 @@ def main():
                             if state == Status.CLOSE_ENOUGH:
                                 time.sleep(ARM_CATCH_TIME)
                             elif state == Status.NOHEAD:
+                                cam.reset_tracking()
+                                found_count = 0
+                                nohead_count = 0
                                 time.sleep(NOHEAD_SLEEP_TIME)
 
                 else:

@@ -275,6 +275,14 @@ class Camera(CameraBase):
         self.last_global_attempted = False
         self.last_global_candidates_found = False
 
+    def reset_tracking(self):
+        super().reset_tracking()
+        self.tracking_roi = None
+        self.last_roi = None
+        self.local_miss_count = 0
+        self.global_miss_count = 0
+        logger.info("YOLO tracking reset")
+
     def record_local_attempt(self, candidates):
         self.last_local_attempted = True
         self.last_local_candidates_found = bool(candidates)
