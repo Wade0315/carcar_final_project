@@ -23,8 +23,9 @@ class Status(Enum):
 FOUND_TOLERANCE = 2         
 CLOSE_TRACK = 22
 ARM_CATCH_TIME = 20
-NOHEAD_AREA = int(os.getenv("YOLO_NOHEAD_AREA", "5000"))
-NOHEAD_SLEEP_TIME = float(os.getenv("YOLO_NOHEAD_SLEEP_TIME", "0.5"))
+NOHEAD_AREA = int(os.getenv("YOLO_NOHEAD_AREA", "3000"))
+NOHEAD_MAX_AREA = int(os.getenv("YOLO_NOHEAD_MAX_AREA", "10000"))
+NOHEAD_SLEEP_TIME = float(os.getenv("YOLO_NOHEAD_SLEEP_TIME", "1.0"))
 NOHEAD_TOLERANCE = max(1, int(os.getenv("YOLO_NOHEAD_TOLERANCE", "3")))
 WARMUP_SECONDS = float(os.getenv("YOLO_WARMUP_SECONDS", "2"))
 WARMUP_STABLE_FRAMES = int(os.getenv("YOLO_WARMUP_STABLE_FRAMES", "5"))
@@ -73,7 +74,7 @@ def is_close_nohead_target(target):
         return False
 
     area = target.get("ball_area") or target.get("area") or 0
-    return area >= NOHEAD_AREA
+    return NOHEAD_MAX_AREA >= area >= NOHEAD_AREA
 
 def describe_target(target):
     if not has_target(target):

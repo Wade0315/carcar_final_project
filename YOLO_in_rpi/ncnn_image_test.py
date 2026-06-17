@@ -36,6 +36,7 @@ class NcnnImageTester(YOLOCamera):
         self.target_class = os.getenv("YOLO_CLASS", target_class or "").strip().lower()
         self.iou_threshold = float(os.getenv("YOLO_IOU", "0.45"))
         self.class_names = self.load_class_names(self.model_path)
+        self.ncnn_threads = max(1, int(os.getenv("YOLO_NCNN_THREADS", "3")))
         self.last_performance = {}
         self.last_ncnn_performance = {}
         self.last_detection_count = 0
