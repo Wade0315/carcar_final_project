@@ -10,10 +10,22 @@ from camera_base import CameraBase
 from performance_logger import PerformanceLogger
 
 logger = logging.getLogger(__name__)
-DEFAULT_MODEL_PATH = "/home/waryt/YOLO/best_ncnn_model_v5nu"
+DEFAULT_MODEL_PATH = "/home/waryt/YOLO/best_ncnn_model_v5nu_ver2_256"
+DEFAULT_LOCAL_MODEL_PATH = "/home/waryt/YOLO/best_ncnn_model_v5nu_ver2_192"
 FRAME_INTERVAL = 1
 DEFAULT_IMAGE_SIZE = 256
+DEFAULT_LOCAL_IMAGE_SIZE = 192
 DEFAULT_EXPOSURE_TIME_US = 5000
+HEAD_CLOSE_AREA = int(os.getenv("YOLO_HEAD_CLOSE_AREA", "40000"))
+BALL_CLOSE_AREA = int(os.getenv("YOLO_BALL_CLOSE_AREA", "65000"))
+DEBUG_FRAME_INTERVAL = max(1, int(os.getenv("YOLO_DEBUG_FRAME_INTERVAL", "30")))
+
+
+def env_bool(name, default=False):
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def setup_logging():
@@ -70,22 +82,87 @@ class Camera(CameraBase):
         self.target_class = os.getenv("YOLO_CLASS", target_class or "").strip().lower()
         self.iou_threshold = float(os.getenv("YOLO_IOU", "0.45"))
         self.class_names = self.load_class_names(self.model_path)
+        self.ncnn_threads = max(1, int(os.getenv("YOLO_NCNN_THREADS", "3")))
+
+        self.roi_tracking_enabled = env_bool("YOLO_ROI_TRACKING", True)
+        self.global_scan_interval = max(1, int(os.getenv("YOLO_GLOBAL_SCAN_INTERVAL", "5")))
+        self.local_model_path = os.getenv("YOLO_LOCAL_MODEL", DEFAULT_LOCAL_MODEL_PATH)
+        self.local_imgsz = int(os.getenv("YOLO_LOCAL_IMGSZ", DEFAULT_LOCAL_IMAGE_SIZE))
+        self.local_min_roi_side = int(os.getenv("YOLO_LOCAL_MIN_ROI_SIDE", "120"))
+        self.local_max_roi_side = int(os.getenv("YOLO_LOCAL_MAX_ROI_SIDE", str(min(self.width, self.height))))
+        self.local_roi_small_area_ratio = float(os.getenv("YOLO_LOCAL_ROI_SMALL_AREA_RATIO", "0.02"))
+        self.local_roi_large_area_ratio = float(os.getenv("YOLO_LOCAL_ROI_LARGE_AREA_RATIO", "0.45"))
+        large_scale_default = os.getenv("YOLO_LOCAL_ROI_BBOX_MARGIN", "1.25")
+        self.local_roi_small_scale = float(os.getenv("YOLO_LOCAL_ROI_SMALL_SCALE", "3.0"))
+        self.local_roi_large_scale = float(os.getenv("YOLO_LOCAL_ROI_LARGE_SCALE", large_scale_default))
+        self.local_roi_full_frame_area_ratio = float(os.getenv("YOLO_LOCAL_FULL_FRAME_AREA_RATIO", "0.45"))
+        self.local_miss_reacquire_frames = max(1, int(os.getenv("YOLO_LOCAL_MISS_REACQUIRE_FRAMES", "1")))
+        self.tracking_roi = None
+        self.detection_frame_count = 0
+        self.local_miss_count = 0
+        self.global_miss_count = 0
+        self.last_detection_mode = "global"
+        self.last_roi = None
+        self.last_local_attempted = False
+        self.last_local_candidates_found = False
+        self.last_global_attempted = False
+        self.last_global_candidates_found = False
+        
         self.last_detection_count = 0
         self.last_candidate_count = 0
         self.last_max_confidence = None
+        self.last_candidate_rejects = {}
+        self.debug_frame_interval = DEBUG_FRAME_INTERVAL
 
         self.open_camera(warmup_seconds=1)
         self.model = self.load_model(self.model_path)
+        if self.local_model_path == self.model_path and self.local_imgsz == self.imgsz:
+            self.local_model = self.model
+        else:
+            local_class_names = self.load_class_names(self.local_model_path)
+            if not self.class_names and local_class_names:
+                self.class_names = local_class_names
+            self.local_model = self.load_model(self.local_model_path)
         self.start_frame_capture()
         time.sleep(2)
         logger.info(
-            "tracking config camera_fps=%.1f frame_interval=%s camera_frame_period_ms=%.1f imgsz=%s exposure_time_us=%s",
+            "tracking config model=%s confidence=%.3f iou=%.3f target_class=%s "
+            "camera_fps=%.1f frame_interval=%s camera_frame_period_ms=%.1f imgsz=%s "
+            "exposure_time_us=%s ncnn_threads=%s head_close_area=%s ball_close_area=%s "
+            "debug_frame_interval=%s",
+            self.model_path,
+            self.confidence,
+            self.iou_threshold,
+            self.target_class or "*",
             self.camera_fps,
             self.frame_interval,
             self.camera_frame_period_ms,
             self.imgsz,
             self.exposure_time_us,
+            self.ncnn_threads,
+            HEAD_CLOSE_AREA,
+            BALL_CLOSE_AREA,
+            self.debug_frame_interval,
         )
+        logger.info(
+            "roi tracking enabled=%s global_scan_interval=%s local_model=%s local_imgsz=%s "
+            "min_roi_side=%s max_roi_side=%s small_area_ratio=%.3f large_area_ratio=%.3f "
+            "small_scale=%.2f large_scale=%.2f full_frame_area_ratio=%.3f "
+            "local_miss_reacquire_frames=%s",
+            self.roi_tracking_enabled,
+            self.global_scan_interval,
+            self.local_model_path,
+            self.local_imgsz,
+            self.local_min_roi_side,
+            self.local_max_roi_side,
+            self.local_roi_small_area_ratio,
+            self.local_roi_large_area_ratio,
+            self.local_roi_small_scale,
+            self.local_roi_large_scale,
+            self.local_roi_full_frame_area_ratio,
+            self.local_miss_reacquire_frames,
+        )
+        logger.info("class names=%s", self.class_names or "not loaded")
 
     def load_model(self, model_path):
         try:
@@ -104,7 +181,7 @@ class Camera(CameraBase):
 
         net = ncnn.Net()
         net.opt.use_vulkan_compute = False
-        net.opt.num_threads = 4
+        net.opt.num_threads = self.ncnn_threads
         net.opt.use_packing_layout = True
         net.opt.use_fp16_storage = True
 
@@ -150,20 +227,250 @@ class Camera(CameraBase):
         return {}
 
     def detect_frame(self, frame):
-        floor_mask = self.build_floor_mask(frame)
-        candidates = self.detect_yolo_candidates(frame)
+        #floor_mask = self.build_floor_mask(frame)
+        floor_mask = None
+        self.detection_frame_count += 1
+        candidates = self.detect_tracking_candidates(frame)
         find_ball, error, target = self.choose_ball(candidates)
+        self.update_tracking_counters(target)
+        self.update_tracking_roi(find_ball, target)
         return floor_mask, candidates, target, find_ball, error
 
-    def detect_yolo_candidates(self, frame):
+    def detect_tracking_candidates(self, frame):
+        self.reset_detection_attempt_state()
+        if not self.roi_tracking_enabled:
+            return self.detect_yolo_candidates(frame, mode="global")
+
+        if self.should_run_global_scan():
+            global_candidates = self.detect_yolo_candidates(frame, mode="global")
+            self.record_global_attempt(global_candidates)
+            if global_candidates or self.tracking_roi is None:
+                return global_candidates
+
+            global_stats = self.capture_detection_stats()
+            local_candidates = self.detect_local_candidates(frame, mode="global_miss_local")
+            self.record_local_attempt(local_candidates)
+            self.combine_detection_stats(global_stats, self.capture_detection_stats())
+            if local_candidates:
+                return local_candidates
+            return []
+
+        local_candidates = self.detect_local_candidates(frame, mode="local")
+        self.record_local_attempt(local_candidates)
+        if local_candidates:
+            return local_candidates
+
+        if self.local_miss_count + 1 < self.local_miss_reacquire_frames:
+            return local_candidates
+
+        local_stats = self.capture_detection_stats()
+        global_candidates = self.detect_yolo_candidates(frame, mode="local_miss_global")
+        self.record_global_attempt(global_candidates)
+        self.combine_detection_stats(local_stats, self.capture_detection_stats())
+        return global_candidates
+
+    def reset_detection_attempt_state(self):
+        self.last_local_attempted = False
+        self.last_local_candidates_found = False
+        self.last_global_attempted = False
+        self.last_global_candidates_found = False
+
+    def reset_tracking(self):
+        super().reset_tracking()
+        self.tracking_roi = None
+        self.last_roi = None
+        self.local_miss_count = 0
+        self.global_miss_count = 0
+        logger.info("YOLO tracking reset")
+
+    def record_local_attempt(self, candidates):
+        self.last_local_attempted = True
+        self.last_local_candidates_found = bool(candidates)
+
+    def record_global_attempt(self, candidates):
+        self.last_global_attempted = True
+        self.last_global_candidates_found = bool(candidates)
+
+    def update_tracking_counters(self, target):
+        target_mode = target.get("detect_mode", "") if target is not None else ""
+        local_accepted = target_mode in {"local", "global_miss_local"}
+        global_accepted = target_mode in {"global", "local_miss_global"}
+
+        if self.last_local_attempted:
+            if local_accepted:
+                self.local_miss_count = 0
+            else:
+                self.local_miss_count += 1
+
+        if self.last_global_attempted:
+            if global_accepted:
+                self.global_miss_count = 0
+            else:
+                self.global_miss_count += 1
+
+        if target is not None and global_accepted:
+            self.local_miss_count = 0
+
+    def should_run_global_scan(self):
+        if self.tracking_roi is None:
+            return True
+        return (self.detection_frame_count - 1) % self.global_scan_interval == 0
+
+    def detect_local_candidates(self, frame, mode="local"):
+        if self.tracking_roi is None:
+            return []
+
+        x1, y1, x2, y2 = self.tracking_roi
+        roi_frame = frame[y1:y2, x1:x2]
+        if roi_frame.size == 0:
+            logger.warning("empty ROI frame roi=%s", self.tracking_roi)
+            return []
+
+        return self.detect_yolo_candidates(
+            roi_frame,
+            model=self.local_model,
+            imgsz=self.local_imgsz,
+            origin=(x1, y1),
+            mode=mode,
+        )
+
+    def update_tracking_roi(self, find_ball, target):
+        if not self.roi_tracking_enabled:
+            return
+        if target is not None:
+            self.tracking_roi = self.build_tracking_roi(target)
+            self.last_roi = self.tracking_roi
+            return
+        if not find_ball:
+            self.tracking_roi = None
+            self.last_roi = None
+
+    def build_tracking_roi(self, target):
+        bbox = target.get("grouped_bbox") or target.get("ball_bbox") or target.get("bbox")
+        if bbox is None:
+            return None
+
+        x1, y1, x2, y2 = bbox
+        w = max(1, x2 - x1)
+        h = max(1, y2 - y1)
+        area = max(1, target.get("grouped_area") or target.get("ball_area") or target.get("area") or w * h)
+        full_area = max(1, self.width * self.height)
+        area_ratio = area / full_area
+        if area_ratio >= self.local_roi_full_frame_area_ratio:
+            return (0, 0, self.width, self.height)
+
+        area_span = max(1e-6, self.local_roi_large_area_ratio - self.local_roi_small_area_ratio)
+        area_position = (area_ratio - self.local_roi_small_area_ratio) / area_span
+        area_position = max(0.0, min(1.0, area_position))
+
+        scale = self.local_roi_small_scale - area_position * (
+            self.local_roi_small_scale - self.local_roi_large_scale
+        )
+        scale = max(1.0, scale)
+        max_side = max(self.local_min_roi_side, self.local_max_roi_side)
+        roi_w = int(round(max(self.local_min_roi_side, min(max_side, w * scale))))
+        roi_h = int(round(max(self.local_min_roi_side, min(max_side, h * scale))))
+
+        center_x = int(round((x1 + x2) / 2))
+        center_y = int(round((y1 + y2) / 2))
+        return self.centered_roi_for_bbox(center_x, center_y, roi_w, roi_h, (x1, y1, x2, y2))
+
+    def centered_roi_for_bbox(self, center_x, center_y, roi_w, roi_h, bbox):
+        bbox_x1, bbox_y1, bbox_x2, bbox_y2 = bbox
+        roi_w = max(2, min(self.width, roi_w))
+        roi_h = max(2, min(self.height, roi_h))
+        roi_w = max(roi_w, bbox_x2 - bbox_x1)
+        roi_h = max(roi_h, bbox_y2 - bbox_y1)
+
+        x1 = int(round(center_x - roi_w / 2))
+        y1 = int(round(center_y - roi_h / 2))
+        x2 = x1 + roi_w
+        y2 = y1 + roi_h
+
+        if x1 > bbox_x1:
+            x2 -= x1 - bbox_x1
+            x1 = bbox_x1
+        if y1 > bbox_y1:
+            y2 -= y1 - bbox_y1
+            y1 = bbox_y1
+        if x2 < bbox_x2:
+            x1 += bbox_x2 - x2
+            x2 = bbox_x2
+        if y2 < bbox_y2:
+            y1 += bbox_y2 - y2
+            y2 = bbox_y2
+
+        if x1 < 0:
+            x2 -= x1
+            x1 = 0
+        if y1 < 0:
+            y2 -= y1
+            y1 = 0
+        if x2 > self.width:
+            x1 -= x2 - self.width
+            x2 = self.width
+        if y2 > self.height:
+            y1 -= y2 - self.height
+            y2 = self.height
+
+        x1 = max(0, x1)
+        y1 = max(0, y1)
+        x2 = min(self.width, max(x1 + 2, x2))
+        y2 = min(self.height, max(y1 + 2, y2))
+        return (x1, y1, x2, y2)
+
+    def capture_detection_stats(self):
+        return {
+            "performance": dict(self.last_performance),
+            "ncnn_performance": dict(self.last_ncnn_performance),
+            "detection_count": self.last_detection_count,
+            "candidate_count": self.last_candidate_count,
+            "max_confidence": self.last_max_confidence,
+            "candidate_rejects": dict(self.last_candidate_rejects),
+            "mode": self.last_detection_mode,
+        }
+
+    def combine_detection_stats(self, first, second):
+        self.last_performance = self.sum_stat_maps(
+            first["performance"],
+            second["performance"],
+        )
+        self.last_ncnn_performance = self.sum_stat_maps(
+            first["ncnn_performance"],
+            second["ncnn_performance"],
+        )
+        self.last_detection_count = first["detection_count"] + second["detection_count"]
+        self.last_candidate_count = second["candidate_count"]
+        first_max = first["max_confidence"]
+        second_max = second["max_confidence"]
+        if first_max is None:
+            self.last_max_confidence = second_max
+        elif second_max is None:
+            self.last_max_confidence = first_max
+        else:
+            self.last_max_confidence = max(first_max, second_max)
+        rejects = dict(first["candidate_rejects"])
+        for reason, count in second["candidate_rejects"].items():
+            rejects[reason] = rejects.get(reason, 0) + count
+        self.last_candidate_rejects = rejects
+        self.last_detection_mode = f"{first['mode']}+{second['mode']}"
+
+    def sum_stat_maps(self, first, second):
+        keys = set(first) | set(second)
+        return {key: first.get(key, 0) + second.get(key, 0) for key in keys}
+
+    def detect_yolo_candidates(self, frame, model=None, imgsz=None, origin=(0, 0), mode="global"):
         self.last_detection_count = 0
         self.last_candidate_count = 0
         self.last_max_confidence = None
+        self.last_candidate_rejects = {}
+        self.last_detection_mode = mode
+        source_height, source_width = frame.shape[:2]
         #proprocess inference decode
         started_at = time.perf_counter()
-        input_image, scale, pad_x, pad_y = self.preprocess_for_ncnn(frame)
+        input_image, scale, pad_x, pad_y = self.preprocess_for_ncnn(frame, imgsz=imgsz)
         preprocessed_at = time.perf_counter()
-        outputs = self.run_ncnn(input_image)
+        outputs = self.run_ncnn(input_image, model=model, imgsz=imgsz)
         inferred_at = time.perf_counter()
         if not outputs:
             self.update_detection_performance(started_at, preprocessed_at, inferred_at)
@@ -175,17 +482,35 @@ class Camera(CameraBase):
         #detection: {"box": (x1, y1, x2, y2),"confidence": confidence,"class_id": class_id,}
         if not detections:
             self.update_detection_performance(started_at, preprocessed_at, inferred_at)
-            logger.info("no detections above confidence %.2f", self.confidence)
+            logger.debug("no detections above confidence %.2f", self.confidence)
             return []
         #postprocess
+        before_nms = len(detections)
         detections = self.nms(detections)
         self.last_detection_count = len(detections)
         #find candidate
-        candidates = self.build_candidates(detections, scale, pad_x, pad_y)
+        candidates = self.build_candidates(
+            detections,
+            scale,
+            pad_x,
+            pad_y,
+            origin=origin,
+            source_width=source_width,
+            source_height=source_height,
+            mode=mode,
+        )
         candidates = self.group_shuttle_candidates(candidates)
         self.last_candidate_count = len(candidates)
         self.update_detection_performance(started_at, preprocessed_at, inferred_at)
-        logger.info("detections=%s candidates=%s", len(detections), len(candidates))
+        logger.debug(
+            "mode=%s roi=%s detections raw=%s after_nms=%s candidates=%s rejects=%s",
+            mode,
+            origin + (source_width, source_height),
+            before_nms,
+            len(detections),
+            len(candidates),
+            self.last_candidate_rejects,
+        )
         return candidates
 
     def update_detection_performance(self, started_at, preprocessed_at, inferred_at):
@@ -214,6 +539,16 @@ class Camera(CameraBase):
             "frame_interval": self.frame_interval,
             "camera_frame_period_ms": round(self.camera_frame_period_ms, 3),
             "capture_ms": round(capture_ms, 3),
+            "capture_gap_ms": (
+                round(self.current_capture_gap_ms, 3)
+                if self.current_capture_gap_ms is not None
+                else None
+            ),
+            "frame_age_ms": (
+                round(self.current_frame_age_ms, 3)
+                if self.current_frame_age_ms is not None
+                else None
+            ),
             "preprocess_ms": round(self.last_performance.get("preprocess_ms", 0), 3),
             "inference_ms": round(self.last_performance.get("inference_ms", 0), 3),
             "ncnn_prepare_ms": round(self.last_ncnn_performance.get("ncnn_prepare_ms", 0), 3),
@@ -225,6 +560,12 @@ class Camera(CameraBase):
             "processing_ms": round(processing_ms, 3),
             "processed_gap_ms": round(processed_gap_ms, 3) if processed_gap_ms is not None else None,
             "effective_fps": round(effective_fps, 3) if effective_fps is not None else None,
+            "detect_mode": self.last_detection_mode,
+            "roi": self.last_roi,
+            "local_attempted": int(self.last_local_attempted),
+            "local_found": int(self.last_local_candidates_found),
+            "global_attempted": int(self.last_global_attempted),
+            "global_found": int(self.last_global_candidates_found),
             "detections": self.last_detection_count,
             "candidates": self.last_candidate_count,
             "find_ball": int(find_ball),
@@ -232,36 +573,45 @@ class Camera(CameraBase):
         }
         self.performance_logger.record(sample)
 
-    def preprocess_for_ncnn(self, frame):
+    def reject_candidate(self, reason):
+        self.last_candidate_rejects[reason] = self.last_candidate_rejects.get(reason, 0) + 1
+
+    def preprocess_for_ncnn(self, frame, imgsz=None):
+        if imgsz is None:
+            imgsz = self.imgsz
         source_h, source_w = frame.shape[:2]
-        scale = min(self.imgsz / source_w, self.imgsz / source_h)
+        scale = min(imgsz / source_w, imgsz / source_h)
         resized_w = int(round(source_w * scale))
         resized_h = int(round(source_h * scale))
         resized = cv2.resize(frame, (resized_w, resized_h), interpolation=cv2.INTER_LINEAR)
 
-        padded = np.full((self.imgsz, self.imgsz, 3), 114, dtype=np.uint8)
-        pad_x = (self.imgsz - resized_w) // 2
-        pad_y = (self.imgsz - resized_h) // 2
+        padded = np.full((imgsz, imgsz, 3), 114, dtype=np.uint8)
+        pad_x = (imgsz - resized_w) // 2
+        pad_y = (imgsz - resized_h) // 2
         padded[pad_y:pad_y + resized_h, pad_x:pad_x + resized_w] = resized
 
         return padded, scale, pad_x, pad_y
 
-    def run_ncnn(self, input_image):
+    def run_ncnn(self, input_image, model=None, imgsz=None):
+        if model is None:
+            model = self.model
+        if imgsz is None:
+            imgsz = self.imgsz
         started_at = time.perf_counter()
-        input_name = self.model.input_names()[0]
-        output_names = sorted(self.model.output_names())
+        input_name = model.input_names()[0]
+        output_names = sorted(model.output_names())
         input_image = np.ascontiguousarray(input_image)
         input_mat = self.ncnn.Mat.from_pixels(
             input_image,
             self.ncnn.Mat.PixelType.PIXEL_BGR2RGB,
-            self.imgsz,
-            self.imgsz,
+            imgsz,
+            imgsz,
         )
         prepared_at = time.perf_counter()
         input_mat.substract_mean_normalize([], [1 / 255.0, 1 / 255.0, 1 / 255.0])
         normalized_at = time.perf_counter()
 
-        with self.model.create_extractor() as extractor:
+        with model.create_extractor() as extractor:
             extractor.input(input_name, input_mat)
             input_at = time.perf_counter()
             outputs = []
@@ -308,7 +658,7 @@ class Camera(CameraBase):
 
         if max_confidence is not None:
             self.last_max_confidence = max_confidence
-            logger.info("max raw confidence=%.4f threshold=%.4f", max_confidence, self.confidence)
+            logger.debug("max raw confidence=%.4f threshold=%.4f", max_confidence, self.confidence)
         return detections
 
     def decode_predictions(self, predictions):
@@ -416,12 +766,34 @@ class Camera(CameraBase):
             return 0
         return intersection / union
 
-    def build_candidates(self, detections, scale, pad_x, pad_y):
+    def build_candidates(
+        self,
+        detections,
+        scale,
+        pad_x,
+        pad_y,
+        origin=(0, 0),
+        source_width=None,
+        source_height=None,
+        mode="global",
+    ):
+        if source_width is None:
+            source_width = self.width
+        if source_height is None:
+            source_height = self.height
+        origin_x, origin_y = origin
         candidates = []
         for detection in detections:
             class_id = detection["class_id"]
             class_name = str(self.class_names.get(class_id, class_id)).lower()
             if self.target_class and self.target_class not in class_name:
+                self.reject_candidate("target_class")
+                logger.debug(
+                    "reject candidate class=%s target_class=%s confidence=%.3f",
+                    class_name,
+                    self.target_class,
+                    detection["confidence"],
+                )
                 continue
 
             x1, y1, x2, y2 = detection["box"]
@@ -430,11 +802,33 @@ class Camera(CameraBase):
             x2 = (x2 - pad_x) / scale
             y2 = (y2 - pad_y) / scale
 
-            x1 = int(max(0, min(self.width - 1, round(x1))))
-            y1 = int(max(0, min(self.height - 1, round(y1))))
-            x2 = int(max(0, min(self.width - 1, round(x2))))
-            y2 = int(max(0, min(self.height - 1, round(y2))))
+            local_x1 = int(max(0, min(source_width - 1, round(x1))))
+            local_y1 = int(max(0, min(source_height - 1, round(y1))))
+            local_x2 = int(max(0, min(source_width - 1, round(x2))))
+            local_y2 = int(max(0, min(source_height - 1, round(y2))))
+            if local_x2 <= local_x1 or local_y2 <= local_y1:
+                self.reject_candidate("invalid_bbox")
+                logger.debug(
+                    "reject candidate invalid bbox class=%s raw_box=%s mapped_bbox=%s",
+                    class_name,
+                    detection["box"],
+                    (local_x1, local_y1, local_x2, local_y2),
+                )
+                continue
+
+            x1 = int(max(0, min(self.width - 1, local_x1 + origin_x)))
+            y1 = int(max(0, min(self.height - 1, local_y1 + origin_y)))
+            x2 = int(max(0, min(self.width - 1, local_x2 + origin_x)))
+            y2 = int(max(0, min(self.height - 1, local_y2 + origin_y)))
             if x2 <= x1 or y2 <= y1:
+                self.reject_candidate("invalid_global_bbox")
+                logger.debug(
+                    "reject candidate invalid global bbox class=%s local_bbox=%s origin=%s global_bbox=%s",
+                    class_name,
+                    (local_x1, local_y1, local_x2, local_y2),
+                    origin,
+                    (x1, y1, x2, y2),
+                )
                 continue
 
             w = x2 - x1
@@ -444,13 +838,17 @@ class Camera(CameraBase):
             error_from_center = target_cx - self.width // 2
             ratio = min(w, h) / max(w, h)
             area = w * h
+            is_head = "head" in class_name
             min_confidence = self.required_confidence(area)
             if detection["confidence"] < min_confidence:
+                self.reject_candidate("area_confidence")
                 logger.debug(
-                    "reject candidate area=%s confidence=%.3f required=%.3f",
+                    "reject candidate class=%s area=%s confidence=%.3f required=%.3f bbox=%s",
+                    class_name,
                     area,
                     detection["confidence"],
                     min_confidence,
+                    (x1, y1, x2, y2),
                 )
                 continue
 
@@ -462,19 +860,39 @@ class Camera(CameraBase):
                 "required_confidence": min_confidence,
                 "class_id": class_id,
                 "class_name": class_name,
-                "is_head": "head" in class_name,
+                "is_head": is_head,
                 "rect_cx": target_cx,
                 "rect_cy": target_cy,
                 "target_cx": target_cx,
                 "target_cy": target_cy,
                 "error": error_from_center,
                 "w_h_ratio": ratio,
-                "head_found": True,
-                "source": "yolo",
+                "source": self.candidate_source(mode, is_head),
+                "detect_mode": mode,
+                "roi": None if origin == (0, 0) and source_width == self.width and source_height == self.height else (
+                    origin_x,
+                    origin_y,
+                    source_width,
+                    source_height,
+                ),
+                "grouped_area": None,
+                "grouped_cx": None,
+                "grouped_cy": None,
+                "ball_area": None if is_head else area,
+                "ball_cx": None if is_head else target_cx,
+                "ball_cy": None if is_head else target_cy,
+                "ball_bbox": None if is_head else (x1, y1, x2, y2),
+                "close_enough": area >= (HEAD_CLOSE_AREA if is_head else BALL_CLOSE_AREA),
             })
 
         candidates.sort(key=lambda item: item["confidence"], reverse=True)
         return candidates
+
+    def candidate_source(self, mode, is_head):
+        base = "yolo_head" if is_head else "yolo_ball"
+        if mode == "global":
+            return base
+        return f"{mode}_{base}"
 
     def group_shuttle_candidates(self, candidates):
         heads = [candidate for candidate in candidates if candidate.get("is_head")]
@@ -485,6 +903,7 @@ class Camera(CameraBase):
         grouped = []
         used_heads = set()
         used_wholes = set()
+        merge_count = 0
 
         for whole_index, whole in enumerate(wholes):
             matches = []
@@ -499,6 +918,7 @@ class Camera(CameraBase):
 
             head_index, head = max(matches, key=lambda item: item[1]["confidence"])
             grouped.append(self.merge_shuttle_candidate(head, whole))
+            merge_count += 1
             used_heads.add(head_index)
             used_wholes.add(whole_index)
 
@@ -510,6 +930,13 @@ class Camera(CameraBase):
                 grouped.append(whole)
 
         grouped.sort(key=lambda item: item["confidence"], reverse=True)
+        logger.debug(
+            "grouped candidates heads=%s balls=%s merged=%s output=%s",
+            len(heads),
+            len(wholes),
+            merge_count,
+            len(grouped),
+        )
         return grouped
 
     def head_matches_whole(self, head, whole):
@@ -535,7 +962,9 @@ class Camera(CameraBase):
         y2 = max(head["bbox"][3], whole["bbox"][3])
         w = x2 - x1
         h = y2 - y1
-        area = w * h
+        grouped_area = w * h
+        grouped_cx = x1 + w // 2
+        grouped_cy = y1 + h // 2
         target_cx = head["target_cx"]
         target_cy = head["target_cy"]
 
@@ -543,7 +972,7 @@ class Camera(CameraBase):
         merged.update({
             "rect": ((target_cx, target_cy), (w, h), 0),
             "bbox": (x1, y1, x2, y2),
-            "area": area,
+            "area": grouped_area,
             "confidence": max(head["confidence"], whole["confidence"]),
             "required_confidence": max(
                 head.get("required_confidence", 0),
@@ -557,14 +986,31 @@ class Camera(CameraBase):
             "target_cy": target_cy,
             "error": target_cx - self.width // 2,
             "w_h_ratio": min(w, h) / max(w, h),
-            "head_found": True,
-            "source": "yolo_grouped",
+            "source": self.grouped_candidate_source(head, whole),
+            "detect_mode": head.get("detect_mode") or whole.get("detect_mode"),
+            "roi": head.get("roi") or whole.get("roi"),
+            "grouped_area": grouped_area,
+            "grouped_cx": grouped_cx,
+            "grouped_cy": grouped_cy,
+            "grouped_bbox": (x1, y1, x2, y2),
+            "ball_area": whole["area"],
+            "ball_cx": whole["target_cx"],
+            "ball_cy": whole["target_cy"],
+            "ball_bbox": whole["bbox"],
+            "close_enough": whole["area"] >= BALL_CLOSE_AREA,
             "head_bbox": head["bbox"],
-            "whole_bbox": whole["bbox"],
             "head_confidence": head["confidence"],
-            "whole_confidence": whole["confidence"],
+            "ball_confidence": whole["confidence"],
         })
         return merged
+
+    def grouped_candidate_source(self, head, whole):
+        head_source = head.get("source", "")
+        whole_source = whole.get("source", "")
+        if head_source.startswith("yolo_") and whole_source.startswith("yolo_"):
+            return "yolo_grouped_head_ball"
+        mode = head.get("detect_mode") or whole.get("detect_mode") or "local"
+        return f"{mode}_yolo_grouped_head_ball"
 
     def process_frame(self, frame):
         _, _, target, find_ball, error = self.detect_frame(frame)
@@ -573,6 +1019,7 @@ class Camera(CameraBase):
     def streaming(self):
         logger.info("Starting YOLO tracking...")
         last_frame_index = None
+        processed_count = 0
 
         try:
             while True:
@@ -582,6 +1029,42 @@ class Camera(CameraBase):
                 find_ball, error, target = self.process_frame(raw_frame)
                 processing_ms = (time.perf_counter() - processing_started_at) * 1000
                 self.record_performance(frame_index, capture_ms, processing_ms, find_ball, error)
+                processed_count += 1
+                if processed_count == 1 or processed_count % self.debug_frame_interval == 0:
+                    logger.info(
+                        "frame=%s processed=%s capture_ms=%.1f capture_gap_ms=%s "
+                        "frame_age_ms=%s preprocess_ms=%.1f "
+                        "inference_ms=%.1f postprocess_ms=%.1f processing_ms=%.1f "
+                        "detections=%s candidates=%s find_ball=%s error=%s target=%s "
+                        "mode=%s roi=%s local_miss=%s global_miss=%s rejects=%s",
+                        frame_index,
+                        processed_count,
+                        capture_ms,
+                        (
+                            "%.1f" % self.current_capture_gap_ms
+                            if self.current_capture_gap_ms is not None
+                            else None
+                        ),
+                        (
+                            "%.1f" % self.current_frame_age_ms
+                            if self.current_frame_age_ms is not None
+                            else None
+                        ),
+                        self.last_performance.get("preprocess_ms", 0),
+                        self.last_performance.get("inference_ms", 0),
+                        self.last_performance.get("postprocess_ms", 0),
+                        processing_ms,
+                        self.last_detection_count,
+                        self.last_candidate_count,
+                        find_ball,
+                        error,
+                        target.get("source") if target is not None else None,
+                        self.last_detection_mode,
+                        self.last_roi,
+                        self.local_miss_count,
+                        self.global_miss_count,
+                        self.last_candidate_rejects,
+                    )
                 yield find_ball, error, target
 
         except KeyboardInterrupt:
@@ -602,5 +1085,5 @@ if __name__ == "__main__":
     setup_logging()
     with Camera() as tracker:
         # tracker.single_test()
-        for find_ball, error in tracker.streaming():
+        for find_ball, error, target in tracker.streaming():
             logger.info("find_ball=%s error=%s", find_ball, error)

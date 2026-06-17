@@ -223,7 +223,9 @@ main.py
 | `1` | `NOT_FOUND` | 找不到目標。 |
 | `2` | `CLOSE_ENOUGH` | 目標已經足夠接近。 |
 | `3` | `OUT_OF_BOUND` | 目標超出允許範圍。 |
-| `4` | `IDLE` | 暫停動作。 |
+| `4` | `INIT` | 初始化狀態。 |
+| `5` | `NOHEAD` | 連續多幀只看到球身、沒有看到球頭，且面積已達門檻。 |
+| `6` | `IDLE` | 暫停動作。 |
 
 ## 環境變數
 
@@ -243,6 +245,8 @@ main.py
 | `YOLO_WARMUP_SECONDS` | `2` | 啟動後至少等待幾秒才允許馬達動作。 |
 | `YOLO_WARMUP_STABLE_FRAMES` | `5` | 需要連續幾次穩定推論才允許馬達動作。 |
 | `YOLO_MAX_INFERENCE_MS` | `800` | 穩定推論的最大允許耗時。 |
+| `YOLO_NOHEAD_AREA` | `5000` | 只看到球身時，用來判斷是否接近的面積門檻。 |
+| `YOLO_NOHEAD_TOLERANCE` | `3` | 需連續幾幀都符合 `NOHEAD` 條件才送出 `NOHEAD`。 |
 
 例如：
 
